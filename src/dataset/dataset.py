@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 from src.utils.utils import neg_sample
 from src.model.data_augmentation import Crop, Mask, Reorder
 from src.model.data_augmentation import AUGMENTATIONS
-from src.model.loss import build_target_positive_sets
+from src.model.loss import build_extra_positive_sets
 
 
 def load_specified_dataset(model_name, config):
@@ -113,23 +113,25 @@ class KGSCLDataset(BaseSequentialDataset):
                          torch.tensor(pos_item_set, dtype=torch.long))
 
         if getattr(self.config, 'use_mp_vt', False):
-            # MP-VT uses the real next item plus TopM substitute neighbors.
-            mp_vt_pos_set = build_target_positive_sets(
-                [target],
-                self.kg_relation_dict,
-                self.co_occurrence_dict,
+            # Weighted MP-VT keeps aug_target as main positive and adds weak substitute positives.
+            mp_vt_extra_pos_set = build_extra_positive_sets(
+                targets=[target],
+                target_sub_items=[aug_target],
+                sub_neighbors=self.kg_relation_dict,
+                corr_score=self.co_occurrence_dict,
                 top_m=self.config.mp_vt_top_m,
                 num_items=self.num_item,
-                pad_id=0
+                pad_id=0,
+                use_raw_target=self.config.mp_vt_use_raw_target
             )[0]
-            mp_vt_pos_size = len(mp_vt_pos_set)
-            mp_vt_no_sub = 1 if mp_vt_pos_size == 1 else 0
-            fixed_len = self.config.mp_vt_top_m + 1
-            mp_vt_pos_set = mp_vt_pos_set[:fixed_len] + [0] * (fixed_len - len(mp_vt_pos_set))
+            mp_vt_extra_pos_size = len(mp_vt_extra_pos_set)
+            mp_vt_no_extra = 1 if mp_vt_extra_pos_size == 0 else 0
+            fixed_len = self.config.mp_vt_top_m
+            mp_vt_extra_pos_set = mp_vt_extra_pos_set[:fixed_len] + [0] * (fixed_len - len(mp_vt_extra_pos_set))
             batch_tensors = batch_tensors + (
-                torch.tensor(mp_vt_pos_set, dtype=torch.long),
-                torch.tensor(mp_vt_pos_size, dtype=torch.long),
-                torch.tensor(mp_vt_no_sub, dtype=torch.long)
+                torch.tensor(mp_vt_extra_pos_set, dtype=torch.long),
+                torch.tensor(mp_vt_extra_pos_size, dtype=torch.long),
+                torch.tensor(mp_vt_no_extra, dtype=torch.long)
             )
 
         return batch_tensors

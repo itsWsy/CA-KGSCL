@@ -33,8 +33,12 @@ if __name__ == '__main__':
     parser.add_argument('--lamda2', default=1.0, type=float, help='view-target CL loss weight')
     parser.add_argument('--use_mp_vt', nargs='?', const=True, default=False, type=str2bool,
                         help='whether to use Multi-Positive View-Target CL')
-    parser.add_argument('--mp_vt_top_m', default=3, type=int,
+    parser.add_argument('--mp_vt_top_m', default=1, type=int,
                         help='number of substitute neighbors used as extra MP-VT positives')
+    parser.add_argument('--mp_vt_extra_weight', default=0.1, type=float,
+                        help='weight of auxiliary positives in Weighted MP-VT')
+    parser.add_argument('--mp_vt_use_raw_target', nargs='?', const=True, default=False, type=str2bool,
+                        help='whether to use raw target as an auxiliary positive')
     parser.add_argument('--mp_vt_tau', default=None, type=float,
                         help='MP-VT temperature; reuse tem2 when not specified')
     # Data
@@ -43,6 +47,7 @@ if __name__ == '__main__':
     parser.add_argument('--separator', default=' ', type=str, help='separator to split item sequence')
     # Training
     parser.add_argument('--epoch_num', default=100, type=int)
+    parser.add_argument('--seed', default=-1, type=int, help="random seed: -1 means don't set random seed")
     parser.add_argument('--train_batch', default=512, type=int)
     parser.add_argument('--learning_rate', default=1e-3, type=float)
     parser.add_argument('--l2', default=0., type=float, help='l2 normalization')  # 1e-6
@@ -62,4 +67,3 @@ if __name__ == '__main__':
 
     trainer = Trainer(config)
     trainer.start_training()
-

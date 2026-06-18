@@ -1,0 +1,384 @@
+你现在需要在当前 KGSCL 代码库中修改已经实现的 V1：Multi-Positive View-Target Contrastive Learning。
+
+当前问题：
+现有 MP-VT 使用如下正样本集合：
+
+P_t = {raw target item} ∪ TopM(N_S(raw target item))
+
+并且所有正样本在分子中权重相同。实验中 mp_vt_top_m=3 和 mp_vt_top_m=5 都没有超过原始 KGSCL，说明额外 substitute 正样本噪声较大，且 raw target 被重复用于 V2T 可能削弱 KGSCL 原始 target substitution 的作用。
+
+现在需要将 MP-VT 修改为：
+
+Weighted MP-VT with Target Substitution
+
+核心目标：
+
+1. 保留 KGSCL 原始 target substitution 的设计；
+2. 不再默认把 raw target item 放入 V2T 正样本集合；
+3. 将原始 KGSCL 生成的 target_sub_item 作为主正样本，权重为 1.0；
+4. 将 raw target 的 TopM substitute neighbors 作为辅助正样本，权重为 rho，默认 rho=0.1；
+5. 辅助正样本只作为弱语义监督，不与主正样本同等对待；
+6. 当没有额外 substitute neighbors 时，新的 weighted MP-VT 应退化为原始 KGSCL 的单正样本 target-substitution V2T；
+7. 不要实现假负样本过滤，不要实现自适应增强，不要实现置信度邻居采样。
+
+一、请先定位当前代码中的以下内容
+请在当前项目中搜索：
+
+* use_mp_vt
+* mp_vt_top_m
+* multi_positive_view_target_loss
+* build_target_positive_sets
+* target_sub_item
+* target substitute
+* target_sub
+* v2t
+* loss_v2t
+* lamda2
+* tem2
+* tau2
+* substitute
+* relation set
+
+请确认以下变量：
+
+1. raw target item tensor，形状 [B]；
+2. KGSCL 原始 target substitution 后得到的 target_sub_item tensor，形状 [B]；
+3. augmented view representation，即用于 View-Target CL 的 h_view，形状 [B, D]；
+4. item embedding matrix，形状 [num_items, D]；
+5. substitute relation set；
+6. co-occurrence/correlation score；
+7. 当前已经实现的 MP-VT loss 调用位置。
+
+二、保留原始开关逻辑
+需要保证：
+
+1. use_mp_vt=False 时，完全使用原始 KGSCL 的 View-Target CL，不改变任何行为；
+2. use_mp_vt=True 时，使用新的 Weighted MP-VT；
+3. 不要删除原来的 target substitution 代码；
+4. 不要改变 KG-substitute、KG-insert、View-View CL、Rec loss、数据处理和评价逻辑；
+5. 不要改 full-ranking evaluation。
+
+三、新增或修改命令行参数
+在参数配置中新增以下参数：
+
+--mp_vt_top_m: int，默认 1
+辅助 substitute 正样本数量。注意默认值从之前的 3 改为 1。
+
+--mp_vt_extra_weight: float，默认 0.1
+辅助正样本权重 rho。
+
+--mp_vt_use_raw_target: bool，默认 False
+是否把 raw target item 加入辅助正样本集合。默认必须为 False。
+
+--mp_vt_tau: float 或 None
+如果已有 tem2 / tau2，则默认继续使用原始 KGSCL 的 V2T temperature。不要强行新增重复 temperature。
+
+要求：
+
+1. 默认配置应为：target_sub_item 作为主正样本，raw target 不作为 V2T 正样本；
+2. mp_vt_top_m=1；
+3. mp_vt_extra_weight=0.1；
+4. lamda2 不在代码中强行修改，但请在最终输出中给出建议运行命令，例如 lamda2=0.3 或 0.5。
+
+四、修改正样本集合构造逻辑
+当前可能已有函数：
+
+build_target_positive_sets(...)
+
+请将其改造或新增一个函数：
+
+build_extra_positive_sets(
+targets,
+target_sub_items,
+sub_neighbors,
+corr_score=None,
+top_m=1,
+num_items=None,
+pad_id=0,
+use_raw_target=False
+)
+
+输入：
+
+* targets: raw target item tensor, shape [B]
+* target_sub_items: KGSCL 原始 target substitution 得到的主正样本 tensor, shape [B]
+* sub_neighbors: substitute relation set
+* corr_score: co-occurrence/correlation score
+* top_m: 额外 substitute 正样本数量
+* num_items: item 总数
+* pad_id: padding id，通常为 0
+* use_raw_target: 是否将 raw target 作为辅助正样本，默认 False
+
+输出：
+
+* extra_pos_sets: List[List[int]]
+  每个样本对应一个辅助正样本列表，不包含主正样本 target_sub_item。
+
+构造逻辑：
+对 batch 中每个样本：
+
+1. 取 raw target t；
+2. 取主正样本 target_sub ts；
+3. 从 substitute relation set 中获取 t 的 substitute neighbors；
+4. 过滤掉：
+
+   * pad_id；
+   * 非法 item id；
+   * target_sub_item；
+   * raw target item，除非 use_raw_target=True；
+   * 重复 item；
+5. 如果 corr_score 可用，则按照 get_corr_score(t, neighbor) 从高到低排序；
+6. 取前 top_m 个作为辅助正样本；
+7. 如果没有可用 neighbor，则该样本 extra_pos_set 为空列表。
+
+注意：
+
+1. target_sub_item 不应出现在 extra_pos_sets 中，因为它已经作为主正样本；
+2. raw target 默认不应出现在 extra_pos_sets 中；
+3. 不能把 complementary / also_buy 关系用于 View-Target 的额外正样本，只能使用 substitute / also_see 关系；
+4. item id 如果是 1-based，必须保证 0 不进入正样本；
+5. Embedding 大小如果是 num_items + 1，合法 id 通常为 1 到 num_items。
+
+请实现或复用以下辅助函数：
+
+* get_substitute_neighbors(item_id, sub_neighbors)
+* get_corr_score(src, dst, corr_score)
+
+它们需要兼容 dict、list、numpy array、torch tensor、scipy sparse matrix 等当前项目中可能已有的数据结构。
+
+五、实现 Weighted MP-VT Loss
+新增函数：
+
+weighted_multi_positive_view_target_loss(
+h_view,
+main_pos_items,
+extra_pos_sets,
+item_embedding,
+tau=1.0,
+extra_weight=0.1
+)
+
+输入：
+
+* h_view: torch.Tensor, shape [B, D]
+* main_pos_items: torch.LongTensor, shape [B]，这里必须是 target_sub_item
+* extra_pos_sets: List[List[int]]
+* item_embedding: torch.Tensor, shape [num_items, D]
+* tau: float
+* extra_weight: float，辅助正样本权重 rho
+
+输出：
+
+* loss: scalar tensor
+
+损失形式：
+
+L = - log [
+exp(sim(h, e_main) / tau)
++
+rho * sum_{v in extra_pos} exp(sim(h, e_v) / tau)
+------------------------------------------------------
+sum_{v in V} exp(sim(h, e_v) / tau)
+]
+
+要求使用 logsumexp 的数值稳定形式，不要直接 exp 后求和。
+
+实现逻辑：
+
+1. logits = h_view @ item_embedding.T / tau，形状 [B, num_items]；
+2. 构造 pos_weight，形状 [B, num_items]，初始为 0；
+3. 对每个样本 b：
+
+   * pos_weight[b, main_pos_item] = 1.0；
+   * 对 extra_pos_sets[b] 中的 item，pos_weight[b, item] = extra_weight；
+   * 如果 extra item 与 main item 相同，不重复；
+4. weighted_pos_logits = logits + log(pos_weight + eps)；
+5. 对 pos_weight <= 0 的位置 mask 为 neg_inf；
+6. log_pos = torch.logsumexp(weighted_pos_logits, dim=1)；
+7. log_all = torch.logsumexp(logits, dim=1)；
+8. loss = -(log_pos - log_all).mean()。
+
+参考实现：
+
+def weighted_multi_positive_view_target_loss(
+h_view,
+main_pos_items,
+extra_pos_sets,
+item_embedding,
+tau=1.0,
+extra_weight=0.1
+):
+logits = torch.matmul(h_view, item_embedding.transpose(0, 1)) / tau
+batch_size, num_items = logits.size()
+device = logits.device
+
+```
+pos_weight = torch.zeros_like(logits)
+
+main_list = main_pos_items.detach().cpu().tolist()
+
+for b in range(batch_size):
+    main_item = int(main_list[b])
+    if 0 <= main_item < num_items:
+        pos_weight[b, main_item] = 1.0
+
+    for item in extra_pos_sets[b]:
+        item = int(item)
+        if 0 <= item < num_items and item != main_item:
+            pos_weight[b, item] = extra_weight
+
+neg_inf = torch.finfo(logits.dtype).min
+weighted_pos_logits = logits + torch.log(pos_weight + 1e-12)
+weighted_pos_logits = weighted_pos_logits.masked_fill(pos_weight <= 0, neg_inf)
+
+log_pos = torch.logsumexp(weighted_pos_logits, dim=1)
+log_all = torch.logsumexp(logits, dim=1)
+
+loss = -(log_pos - log_all).mean()
+return loss
+```
+
+注意：
+
+1. 如果原始 KGSCL 的 similarity 使用 dot product，则保持 dot product；
+2. 如果原始 KGSCL 对 embedding 做了 normalize，这里也保持一致；如果原始没有 normalize，不要额外加；
+3. h_view、main_pos_items、item_embedding 必须在同一 device；
+4. extra_pos_sets 是 Python list 没问题，但 item id 必须合法；
+5. 当 extra_pos_sets 全为空时，loss 应该等价于单正样本 target_sub_item 的 View-Target CL。
+
+六、接入训练流程
+找到当前 use_mp_vt=True 的分支。
+
+原来可能是：
+
+if args.use_mp_vt:
+pos_sets = build_target_positive_sets(targets, ...)
+loss_v2t = multi_positive_view_target_loss(h_view, pos_sets, item_embedding, tau)
+
+现在改成：
+
+if args.use_mp_vt:
+extra_pos_sets = build_extra_positive_sets(
+targets=target_items,
+target_sub_items=target_sub_items,
+sub_neighbors=substitute_relation_set,
+corr_score=correlation_score,
+top_m=args.mp_vt_top_m,
+num_items=num_items,
+pad_id=pad_id,
+use_raw_target=args.mp_vt_use_raw_target
+)
+
+```
+loss_v2t = weighted_multi_positive_view_target_loss(
+    h_view=aug_view_repr,
+    main_pos_items=target_sub_items,
+    extra_pos_sets=extra_pos_sets,
+    item_embedding=model.item_embedding.weight,
+    tau=args.mp_vt_tau if args.mp_vt_tau is not None else args.tem2,
+    extra_weight=args.mp_vt_extra_weight
+)
+```
+
+else:
+loss_v2t = original_view_target_cl_loss(...)
+
+关键要求：
+
+1. main_pos_items 必须使用 target_sub_items，不要使用 raw target；
+2. target_items 只用于查找其 substitute neighbors；
+3. raw target 默认不作为 V2T 正样本；
+4. 总损失仍然保持：
+   loss = loss_rec + lamda1 * loss_v2v + lamda2 * loss_v2t
+5. 不要改 loss_rec；
+6. 不要改 loss_v2v；
+7. 不要改增强序列生成逻辑。
+
+七、日志输出
+训练开始时打印：
+
+use_mp_vt = True/False
+mp_vt_top_m = ...
+mp_vt_extra_weight = ...
+mp_vt_use_raw_target = ...
+mp_vt_main_positive = target_sub_item
+mp_vt_tau = ...
+
+每个 epoch 或第一个 epoch 打印：
+
+1. avg_extra_positive_size；
+2. no_extra_positive_ratio；
+3. avg_effective_positive_weight = 1.0 + extra_weight * avg_extra_positive_size；
+4. loss_rec；
+5. loss_v2v；
+6. loss_v2t。
+
+不要再打印 avg_positive_set_size，因为现在主正样本和辅助正样本权重不同，应该改成 avg_extra_positive_size。
+
+八、检查和测试
+实现完成后请做以下检查：
+
+1. use_mp_vt=False：
+
+   * 训练流程能正常运行；
+   * 原始 KGSCL 行为不变。
+
+2. use_mp_vt=True, mp_vt_top_m=0：
+
+   * extra_pos_sets 应全部为空；
+   * Weighted MP-VT 应退化为只使用 target_sub_item；
+   * loss_v2t 不应 NaN。
+
+3. use_mp_vt=True, mp_vt_top_m=1：
+
+   * avg_extra_positive_size 应在 0 到 1 之间；
+   * no_extra_positive_ratio 应合理；
+   * loss_v2t 可 backward；
+   * GPU/CPU device 不报错。
+
+4. 检查正样本：
+
+   * 0 不进入 positive；
+   * raw target 默认不进入 positive；
+   * target_sub_item 是 main positive；
+   * extra positives 不包含 target_sub_item；
+   * extra positives 来自 substitute relation，而不是 complementary relation。
+
+九、建议运行命令
+完成代码修改后，请给出以下运行命令模板。命令格式请根据当前项目实际 main 文件和参数名适配。
+
+原始 KGSCL：
+--use_mp_vt False --seed 42
+
+Weighted MP-VT 推荐第一组：
+--use_mp_vt True --mp_vt_top_m 1 --mp_vt_extra_weight 0.1 --mp_vt_use_raw_target False --lamda2 0.3 --seed 42
+
+Weighted MP-VT 推荐第二组：
+--use_mp_vt True --mp_vt_top_m 1 --mp_vt_extra_weight 0.1 --mp_vt_use_raw_target False --lamda2 0.5 --seed 42
+
+Weighted MP-VT 推荐第三组：
+--use_mp_vt True --mp_vt_top_m 2 --mp_vt_extra_weight 0.1 --mp_vt_use_raw_target False --lamda2 0.3 --seed 42
+
+不建议继续使用：
+--mp_vt_top_m 3
+--mp_vt_top_m 5
+除非 M=1/M=2 已经有效。
+
+十、最终输出
+修改完成后，请总结：
+
+1. 修改了哪些文件；
+2. 新增或修改了哪些函数；
+3. Weighted MP-VT 的调用位置；
+4. main positive 使用的是哪个变量；
+5. raw target 是否默认进入 V2T 正样本集合；
+6. extra positive 的来源关系；
+7. use_mp_vt=False 是否保持原始 KGSCL；
+8. 给出建议运行命令；
+9. 如果发现原项目 item id 是 1-based 或 0-based，请说明处理方式。
+
+这次只实现 Weighted MP-VT with Target Substitution。
+不要实现假负样本过滤。
+不要实现置信度邻居采样。
+不要实现自适应增强位置选择。
+不要引入 GNN、扩散、多意图、超图、傅里叶等模块。

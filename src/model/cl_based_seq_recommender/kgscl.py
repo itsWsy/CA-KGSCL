@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.nn.init import xavier_normal_, xavier_uniform_
 
-from src.model.loss import InfoNCELoss, multi_positive_view_target_loss
+from src.model.loss import InfoNCELoss, weighted_multi_positive_view_target_loss
 from src.model.sequential_encoder import Transformer
 from src.utils.utils import HyperParamDict
 
@@ -25,6 +25,8 @@ class KGSCL(AbstractRecommender):
         self.lamda2 = config.lamda2
         self.use_mp_vt = config.use_mp_vt
         self.mp_vt_top_m = config.mp_vt_top_m
+        self.mp_vt_extra_weight = config.mp_vt_extra_weight
+        self.mp_vt_use_raw_target = config.mp_vt_use_raw_target
         self.mp_vt_tau = config.mp_vt_tau if config.mp_vt_tau is not None else self.tem2
         self._loss_logged_epochs = set()
 
@@ -47,6 +49,9 @@ class KGSCL(AbstractRecommender):
         self.apply(self._init_weights)
         logging.info(f'use_mp_vt = {self.use_mp_vt}')
         logging.info(f'mp_vt_top_m = {self.mp_vt_top_m}')
+        logging.info(f'mp_vt_extra_weight = {self.mp_vt_extra_weight}')
+        logging.info(f'mp_vt_use_raw_target = {self.mp_vt_use_raw_target}')
+        logging.info('mp_vt_main_positive = target_sub_item')
         logging.info(f'mp_vt_tau = {self.mp_vt_tau}')
 
     def _init_weights(self, module):
@@ -83,15 +88,18 @@ class KGSCL(AbstractRecommender):
         v2v_loss = self.nce_loss(seq_embedding, v2t_seq_embedding)
         # view-target (v2t) CL loss
         if self.use_mp_vt:
-            mp_vt_pos_set, mp_vt_pos_size, mp_vt_no_sub = args[6], args[7], args[8]
-            pos_sets = []
-            for row, size in zip(mp_vt_pos_set.detach().cpu().tolist(), mp_vt_pos_size.detach().cpu().tolist()):
-                pos_sets.append(row[:int(size)])
-            v2t_loss = multi_positive_view_target_loss(
+            mp_vt_extra_pos_set, mp_vt_extra_pos_size, mp_vt_no_extra = args[6], args[7], args[8]
+            extra_pos_sets = []
+            for row, size in zip(mp_vt_extra_pos_set.detach().cpu().tolist(),
+                                 mp_vt_extra_pos_size.detach().cpu().tolist()):
+                extra_pos_sets.append(row[:int(size)])
+            v2t_loss = weighted_multi_positive_view_target_loss(
                 h_view=v2v_seq_embedding,
-                pos_sets=pos_sets,
+                main_pos_items=aug_target,
+                extra_pos_sets=extra_pos_sets,
                 item_embedding=self.item_embedding.weight,
-                tau=self.mp_vt_tau
+                tau=self.mp_vt_tau,
+                extra_weight=self.mp_vt_extra_weight
             )
         else:
             v2t_logits = v2v_seq_embedding @ self.item_embedding.weight.t()
@@ -103,10 +111,12 @@ class KGSCL(AbstractRecommender):
         if epoch is not None and epoch not in self._loss_logged_epochs:
             self._loss_logged_epochs.add(epoch)
             if self.use_mp_vt:
-                avg_pos_size = mp_vt_pos_size.float().mean().item()
-                no_sub_ratio = mp_vt_no_sub.float().mean().item()
-                logging.info(f'MP-VT epoch {epoch}: avg_positive_set_size={avg_pos_size:.4f}, '
-                             f'no_substitute_ratio={no_sub_ratio:.4f}, '
+                avg_extra_size = mp_vt_extra_pos_size.float().mean().item()
+                no_extra_ratio = mp_vt_no_extra.float().mean().item()
+                avg_effective_weight = 1.0 + self.mp_vt_extra_weight * avg_extra_size
+                logging.info(f'MP-VT epoch {epoch}: avg_extra_positive_size={avg_extra_size:.4f}, '
+                             f'no_extra_positive_ratio={no_extra_ratio:.4f}, '
+                             f'avg_effective_positive_weight={avg_effective_weight:.4f}, '
                              f'loss_rec={rec_loss.item():.4f}, loss_v2v={v2v_loss.item():.4f}, '
                              f'loss_v2t={v2t_loss.item():.4f}')
             else:
@@ -164,8 +174,12 @@ def KGSCL_config():
     parser.add_argument('--lamda2', default=1.0, type=float, help='view-target CL loss weight')
     parser.add_argument('--use_mp_vt', default=False, action='store_true',
                         help='whether to use Multi-Positive View-Target CL')
-    parser.add_argument('--mp_vt_top_m', default=3, type=int,
+    parser.add_argument('--mp_vt_top_m', default=1, type=int,
                         help='number of substitute neighbors used as extra MP-VT positives')
+    parser.add_argument('--mp_vt_extra_weight', default=0.1, type=float,
+                        help='weight of auxiliary positives in Weighted MP-VT')
+    parser.add_argument('--mp_vt_use_raw_target', default=False, action='store_true',
+                        help='whether to use raw target as an auxiliary positive')
     parser.add_argument('--mp_vt_tau', default=None, type=float,
                         help='MP-VT temperature; reuse tem2 when not specified')
     parser.add_argument('--kg_data_type', default='other', type=str, choices=['pretrain', 'jointly_train', 'other'])

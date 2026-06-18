@@ -70,7 +70,7 @@ def get_substitute_neighbors(item_id, sub_neighbors):
         if isinstance(neighbors, dict):
             neighbors = neighbors.get('s', [])
         return list(neighbors) if neighbors is not None else []
-    if isinstance(sub_neighbors, (list, tuple)):
+    if isinstance(sub_neighbors, (list, tuple)) or hasattr(sub_neighbors, '__len__'):
         if 0 <= item_id < len(sub_neighbors):
             neighbors = sub_neighbors[item_id]
         elif item_id > 0 and item_id - 1 < len(sub_neighbors):
@@ -79,6 +79,10 @@ def get_substitute_neighbors(item_id, sub_neighbors):
             return []
         if isinstance(neighbors, dict):
             neighbors = neighbors.get('s', [])
+        if torch.is_tensor(neighbors):
+            neighbors = neighbors.detach().cpu().tolist()
+        elif hasattr(neighbors, 'tolist'):
+            neighbors = neighbors.tolist()
         return list(neighbors) if neighbors is not None else []
     return []
 
@@ -103,7 +107,14 @@ def get_corr_score(src, dst, corr_score):
                 return 0.
         return 0.
     try:
-        return corr_score[src][dst]
+        score = corr_score[src][dst]
+        if torch.is_tensor(score):
+            score = score.detach().cpu().item()
+        elif hasattr(score, 'toarray'):
+            score = score.toarray().item()
+        elif hasattr(score, 'item'):
+            score = score.item()
+        return score
     except Exception:
         return 0.
 
@@ -170,6 +181,62 @@ def build_target_positive_sets(targets, sub_neighbors, corr_score=None, top_m=3,
     return pos_sets
 
 
+def build_extra_positive_sets(targets, target_sub_items, sub_neighbors, corr_score=None, top_m=1,
+                              num_items=None, pad_id=0, use_raw_target=False):
+    """Weighted MP-VT: build TopM auxiliary substitute positives for each raw target."""
+    extra_pos_sets = []
+    target_list = targets.detach().cpu().tolist() if torch.is_tensor(targets) else list(targets)
+    main_list = target_sub_items.detach().cpu().tolist() if torch.is_tensor(target_sub_items) else list(target_sub_items)
+
+    for target, main_item in zip(target_list, main_list):
+        target = int(target)
+        main_item = int(main_item)
+        shifted_from_raw_kg = False
+
+        if isinstance(sub_neighbors, dict) and target in sub_neighbors:
+            key_item = target
+            neighs = get_substitute_neighbors(key_item, sub_neighbors)
+        elif isinstance(sub_neighbors, dict) and target > 0 and (target - 1) in sub_neighbors:
+            key_item = target - 1
+            neighs = get_substitute_neighbors(key_item, sub_neighbors)
+            shifted_from_raw_kg = True
+        else:
+            key_item = target
+            neighs = get_substitute_neighbors(key_item, sub_neighbors)
+            if len(neighs) == 0 and target > 0:
+                key_item = target - 1
+                neighs = get_substitute_neighbors(key_item, sub_neighbors)
+                shifted_from_raw_kg = len(neighs) > 0
+
+        aligned_scores = _get_aligned_substitute_scores(key_item, corr_score)
+        valid_pairs = []
+        seen = set()
+        for idx, nb in enumerate(neighs):
+            raw_nb = int(nb)
+            model_nb = raw_nb + 1 if shifted_from_raw_kg else raw_nb
+            if model_nb == pad_id:
+                continue
+            if num_items is not None and (model_nb < 0 or model_nb >= num_items):
+                continue
+            if model_nb == main_item:
+                continue
+            if not use_raw_target and model_nb == target:
+                continue
+            if model_nb in seen:
+                continue
+            seen.add(model_nb)
+            if aligned_scores is not None and idx < len(aligned_scores):
+                score = aligned_scores[idx]
+            else:
+                score = get_corr_score(key_item, raw_nb, corr_score)
+            valid_pairs.append((model_nb, score))
+
+        valid_pairs = sorted(valid_pairs, key=lambda x: x[1], reverse=True)
+        extra_pos_sets.append([nb for nb, _ in valid_pairs[:top_m]])
+
+    return extra_pos_sets
+
+
 def multi_positive_view_target_loss(h_view, pos_sets, item_embedding, tau):
     """MP-VT: multi-positive view-target contrastive loss with stable logsumexp."""
     logits = torch.matmul(h_view, item_embedding.transpose(0, 1)) / tau
@@ -191,6 +258,36 @@ def multi_positive_view_target_loss(h_view, pos_sets, item_embedding, tau):
     neg_inf = torch.finfo(logits.dtype).min
     pos_logits = logits.masked_fill(~pos_mask, neg_inf)
     log_pos = torch.logsumexp(pos_logits, dim=1)
+    log_all = torch.logsumexp(logits, dim=1)
+    return -(log_pos - log_all).mean()
+
+
+def weighted_multi_positive_view_target_loss(h_view, main_pos_items, extra_pos_sets, item_embedding,
+                                             tau=1.0, extra_weight=0.1):
+    """Weighted MP-VT: target-substitution main positive plus weighted auxiliary positives."""
+    logits = torch.matmul(h_view, item_embedding.transpose(0, 1)) / tau
+    batch_size, num_items = logits.size()
+    pos_weight = torch.zeros_like(logits)
+
+    main_list = main_pos_items.detach().cpu().tolist() if torch.is_tensor(main_pos_items) else list(main_pos_items)
+    if torch.is_tensor(extra_pos_sets):
+        extra_pos_sets = extra_pos_sets.detach().cpu().tolist()
+
+    for batch_idx in range(batch_size):
+        main_item = int(main_list[batch_idx])
+        if 0 <= main_item < num_items:
+            pos_weight[batch_idx, main_item] = 1.0
+
+        for item in extra_pos_sets[batch_idx]:
+            item = int(item)
+            if 0 <= item < num_items and item != main_item:
+                pos_weight[batch_idx, item] = extra_weight
+
+    eps = 1e-12
+    neg_inf = torch.finfo(logits.dtype).min
+    weighted_pos_logits = logits + torch.log(pos_weight + eps)
+    weighted_pos_logits = weighted_pos_logits.masked_fill(pos_weight <= 0, neg_inf)
+    log_pos = torch.logsumexp(weighted_pos_logits, dim=1)
     log_all = torch.logsumexp(logits, dim=1)
     return -(log_pos - log_all).mean()
 
