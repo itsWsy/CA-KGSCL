@@ -1,0 +1,305 @@
+你现在需要在当前 KGSCL 代码库中实现一个新增模块：
+
+V1: Multi-Positive View-Target Contrastive Learning, 简称 MP-VT。
+
+目标：
+在不改变 KGSCL 原始主体结构的前提下，只修改 View-Target CL 部分。
+原始 KGSCL 的 View-Target CL 通常是将增强序列表示 h_view 与一个 target substitute item 进行对比。
+现在需要将其改为多正样本 View-Target CL：
+对于每个真实目标物品 target_item，构造正样本集合：
+
+P_t = {target_item} ∪ TopM(N_S(target_item))
+
+其中：
+1. target_item 是当前训练样本的真实下一个物品；
+2. N_S(target_item) 是 target_item 在 IKG 中的 substitute relation 邻居集合；
+3. TopM 表示按照 KGSCL 中已有的 co-occurrence/correlation score 从高到低选择前 M 个 substitute 邻居；
+4. 如果 target_item 没有 substitute 邻居，则 P_t = {target_item}；
+5. M 由命令行参数控制，默认值为 3。
+
+最终损失函数为：
+
+L_MP-VT = - log [
+    sum_{v+ in P_t} exp(sim(h_view, e_v+) / tau)
+    /
+    sum_{v in V} exp(sim(h_view, e_v) / tau)
+]
+
+注意：
+1. 分子是多个正样本的 logsumexp；
+2. 分母是全物品集合上的 logsumexp；
+3. 使用数值稳定实现，不要直接 exp 后求和；
+4. 不要实现假负样本过滤，那是后续 V2 模块；
+5. 不要引入 GNN、扩散、多意图、超图、傅里叶等新技术；
+6. 不要大规模重构代码，只做最小侵入式修改；
+7. 保留原始 KGSCL 的 View-Target CL 逻辑，可以通过参数开关选择是否启用 MP-VT。
+
+具体实现要求：
+
+一、先阅读并定位代码结构
+请先在当前仓库中搜索以下内容，找到 KGSCL 的训练流程和 View-Target CL 实现位置：
+- view target
+- V2T
+- target substitute
+- target_sub
+- KG-substitute
+- substitute set
+- correlation
+- co-occurrence
+- loss_v2t
+- lambda2
+
+定位以下对象：
+1. item embedding matrix；
+2. target item tensor，形状通常为 [B]；
+3. augmented view representation，形状通常为 [B, D]；
+4. substitute neighbor dictionary / relation set；
+5. co-occurrence correlation score；
+6. 原始 View-Target CL loss 函数。
+
+二、增加命令行参数
+在参数配置文件或 main.py / config parser 中新增以下参数：
+
+--use_mp_vt: bool，默认 False
+    是否启用 Multi-Positive View-Target CL。
+
+--mp_vt_top_m: int，默认 3
+    每个 target item 选取多少个 substitute 邻居作为额外正样本。
+
+--mp_vt_tau: float，默认沿用原始 view-target temperature；
+    如果代码中已有 tau2 或 temperature_v2t，则优先复用原参数，不要重复定义。
+
+要求：
+1. 当 --use_mp_vt False 时，训练结果应与原始 KGSCL 基本一致；
+2. 当 --use_mp_vt True 时，使用新的 MP-VT loss 替换原始 View-Target CL loss；
+3. 其他训练逻辑保持不变。
+
+三、实现正样本集合构造函数
+新增函数，建议放在原始 loss 文件、augmentation 文件或 utils 文件中，位置要和现有代码风格一致。
+
+函数功能：
+输入：
+- targets: torch.LongTensor, shape [B]
+- sub_neighbors: dict 或 list，表示每个 item 的 substitute 邻居集合
+- corr_score: KGSCL 已有的 co-occurrence/correlation score
+- top_m: int
+- num_items: int，可选，用于过滤非法 item id
+- pad_id: int，可选，过滤 padding item
+
+输出：
+- pos_sets: List[List[int]]
+  每个样本对应一个正样本 item id 列表。
+
+逻辑：
+1. 对 batch 中每个 target t：
+   pos = [t]
+2. 从 substitute neighbor 集合中取出 t 的邻居 neighs；
+3. 过滤掉 padding item、非法 item id、重复 item；
+4. 按 corr_score[(t, neigh)] 从高到低排序；
+5. 选择前 top_m 个邻居加入 pos；
+6. 如果没有邻居，则 pos 只有 target 本身；
+7. 返回 pos_sets。
+
+注意：
+1. 不要把 target 本身重复加入；
+2. 注意 item id 是否从 1 开始，代码中如果有 padding id=0，需要保持一致；
+3. 不要改变原始数据预处理逻辑；
+4. 如果 corr_score 是矩阵，则使用 corr_score[t][neigh]；
+5. 如果 corr_score 是 dict，则使用 corr_score.get((t, neigh), default_score)；
+6. 如果原始代码中 relation set 是 numpy/list/dict，要兼容当前项目的数据结构。
+
+参考实现形式如下，但请根据当前仓库变量名适配：
+
+def build_target_positive_sets(targets, sub_neighbors, corr_score=None, top_m=3, num_items=None, pad_id=0):
+    pos_sets = []
+    target_list = targets.detach().cpu().tolist()
+
+    for t in target_list:
+        t = int(t)
+        pos = [t]
+
+        neighs = get_substitute_neighbors(t, sub_neighbors)
+
+        valid_neighs = []
+        for nb in neighs:
+            nb = int(nb)
+            if nb == pad_id:
+                continue
+            if num_items is not None and (nb < 0 or nb >= num_items):
+                continue
+            if nb == t:
+                continue
+            valid_neighs.append(nb)
+
+        valid_neighs = list(set(valid_neighs))
+
+        if corr_score is not None and len(valid_neighs) > 0:
+            valid_neighs = sorted(
+                valid_neighs,
+                key=lambda x: get_corr_score(t, x, corr_score),
+                reverse=True
+            )
+
+        pos.extend(valid_neighs[:top_m])
+        pos_sets.append(pos)
+
+    return pos_sets
+
+请同时实现两个辅助函数：
+1. get_substitute_neighbors(item_id, sub_neighbors)
+2. get_corr_score(src, dst, corr_score)
+
+它们需要兼容当前代码中已有的数据结构，不要假设一定是 dict。
+
+四、实现 MP-VT loss
+新增函数：
+
+multi_positive_view_target_loss(h_view, pos_sets, item_embedding, tau)
+
+输入：
+- h_view: torch.Tensor, shape [B, D]
+- pos_sets: List[List[int]]
+- item_embedding: torch.Tensor, shape [num_items, D]
+- tau: float
+
+输出：
+- loss: scalar tensor
+
+计算逻辑：
+1. logits = h_view @ item_embedding.T / tau，形状 [B, num_items]
+2. 构造 pos_mask，形状 [B, num_items]，正样本位置为 True；
+3. log_pos = logsumexp(logits masked by pos_mask, dim=1)
+4. log_all = logsumexp(logits, dim=1)
+5. loss = -(log_pos - log_all).mean()
+
+注意：
+1. h_view 和 item_embedding 必须在同一 device；
+2. pos_mask 必须在同一 device；
+3. 如果某个 pos_set 为空，至少加入 target item，不能为空；
+4. 使用 torch.logsumexp；
+5. mask 时不要使用固定 -1e9 导致 fp16 溢出，建议使用 torch.finfo(logits.dtype).min；
+6. 如果原始 KGSCL 的 sim 使用 dot product，则保持 dot product；
+7. 如果原始 KGSCL 对 embedding 做 normalize，则这里也保持一致；否则不要额外 normalize；
+8. 不要改变 Rec loss 的 item embedding 使用方式。
+
+参考实现：
+
+def multi_positive_view_target_loss(h_view, pos_sets, item_embedding, tau):
+    logits = torch.matmul(h_view, item_embedding.transpose(0, 1)) / tau
+
+    batch_size, num_items = logits.size()
+    device = logits.device
+
+    pos_mask = torch.zeros((batch_size, num_items), dtype=torch.bool, device=device)
+
+    for b, pos_items in enumerate(pos_sets):
+        for item in pos_items:
+            item = int(item)
+            if 0 <= item < num_items:
+                pos_mask[b, item] = True
+
+    neg_inf = torch.finfo(logits.dtype).min
+    pos_logits = logits.masked_fill(~pos_mask, neg_inf)
+
+    log_pos = torch.logsumexp(pos_logits, dim=1)
+    log_all = torch.logsumexp(logits, dim=1)
+
+    loss = -(log_pos - log_all).mean()
+    return loss
+
+五、接入训练流程
+找到原始训练中计算 View-Target CL 的地方，大概类似：
+
+loss_v2t = view_target_cl_loss(h_view, target_sub_item, ...)
+
+改成：
+
+if args.use_mp_vt:
+    pos_sets = build_target_positive_sets(
+        targets=target_items,
+        sub_neighbors=substitute_relation_set,
+        corr_score=correlation_score,
+        top_m=args.mp_vt_top_m,
+        num_items=num_items,
+        pad_id=pad_id
+    )
+    loss_v2t = multi_positive_view_target_loss(
+        h_view=aug_view_repr,
+        pos_sets=pos_sets,
+        item_embedding=model.item_embedding.weight,
+        tau=args.mp_vt_tau or args.tau2
+    )
+else:
+    loss_v2t = original_view_target_cl_loss(...)
+
+要求：
+1. h_view 必须使用原始 KGSCL 中用于 View-Target CL 的增强视图表示；
+2. target_items 必须使用真实 next item，而不是已经替换后的单个 target substitute；
+3. MP-VT 的正样本集合包含真实 target 和 TopM substitute neighbors；
+4. 不要改变 LRec 和 LV2V；
+5. 总损失仍然是：
+   loss = loss_rec + lambda1 * loss_v2v + lambda2 * loss_v2t
+
+六、日志输出
+训练开始时打印以下信息：
+- use_mp_vt = True/False
+- mp_vt_top_m = M
+- mp_vt_tau = tau
+
+每个 epoch 或至少第一个 epoch 打印一次：
+- 平均每个 target 的 positive set size
+- 没有 substitute neighbor 的 target 比例
+- loss_rec
+- loss_v2v
+- loss_v2t
+
+注意不要打印太多，避免日志过长。
+
+七、测试与验证
+实现后请完成以下检查：
+
+1. 语法检查：
+   python -m py_compile 相关修改文件
+
+2. 小 batch 前向检查：
+   使用一个很小 batch，确认：
+   - pos_sets 不为空；
+   - loss_v2t 不是 NaN；
+   - loss_v2t 可以 backward；
+   - GPU/CPU device 不报错。
+
+3. 对比实验命令：
+   请给出以下运行命令模板，具体参数沿用当前项目已有格式：
+
+   原始 KGSCL：
+   --use_mp_vt False
+
+   V1:
+   --use_mp_vt True --mp_vt_top_m 1
+   --use_mp_vt True --mp_vt_top_m 3
+   --use_mp_vt True --mp_vt_top_m 5
+
+八、代码风格要求
+1. 尽量复用当前项目已有变量名和函数风格；
+2. 不要重构无关文件；
+3. 不要改数据划分、评价指标、负采样或 full ranking 逻辑；
+4. 不要修改 KG-substitute 和 KG-insert 的增强过程；
+5. 不要引入新的大型依赖；
+6. 需要保证 use_mp_vt=False 时原始 KGSCL 能正常运行；
+7. 所有新增函数加简短注释，说明这是 MP-VT 模块；
+8. 如果原始代码中已有 target substitution，请保留原始实现，不要删除，只是在 use_mp_vt=True 时绕过单正样本 V2T。
+
+九、最终输出
+完成后请给出：
+1. 修改了哪些文件；
+2. 新增了哪些函数；
+3. View-Target CL 的调用位置在哪里；
+4. 如何运行原始 KGSCL；
+5. 如何运行 V1: KGSCL + MP-VT；
+6. 如果实现中发现 item id 是 1-based 或 0-based，请明确说明处理方式；
+7. 如果 substitute relation set 或 correlation score 的数据结构和预期不同，请说明你做了怎样的兼容处理。
+
+这次只实现 V1：Multi-Positive View-Target CL。
+不要实现 V2 假负样本过滤。
+不要实现 V3 置信度邻居采样。
+不要实现 V4 自适应增强位置选择。
