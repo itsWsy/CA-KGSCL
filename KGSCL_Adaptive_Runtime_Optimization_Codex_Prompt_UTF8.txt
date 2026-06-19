@@ -1,0 +1,737 @@
+﻿KGSCL 自适应位置增强模块运行时间优化 Codex 提示词
+
+文件编码说明：
+本文件采用 UTF-8 with BOM 编码，并使用 Windows CRLF 换行。请在保存和修改代码、配置文件及日志时继续使用 UTF-8 编码，避免中文乱码。
+
+你现在需要优化当前 KGSCL 项目中“位置级自适应知识增强模块”的运行时间。
+
+已知现象：
+- 原始 KGSCL：单个 epoch 约 134～140 秒；
+- 启用位置级自适应知识增强后：单个 epoch 约 576～581 秒；
+- 运行时间约增加 4.2 倍；
+- 模型参数量没有明显变化；
+- 性能与算法功能本身暂时不要求调整。
+
+本次任务的唯一目标是：
+在不改变任何算法功能、训练目标、增强逻辑、采样语义和实验配置的前提下，显著降低自适应位置增强模块的运行时间。
+
+必须保持不变的内容：
+1. 原始 KGSCL 的推荐损失；
+2. View-View Contrastive Learning；
+3. View-Target Contrastive Learning；
+4. KG-Substitute；
+5. KG-Insert；
+6. target substitution；
+7. substitute_ratio；
+8. insert_ratio；
+9. position importance 公式；
+10. KG reliability 公式；
+11. Substitute 位置评分公式；
+12. Insert 位置评分公式；
+13. position_select_mode；
+14. position_temperature；
+15. warm-up 机制；
+16. fallback 机制；
+17. relation set；
+18. co-occurrence/correlation score；
+19. 评价方式；
+20. full-ranking；
+21. 数据集划分；
+22. early stopping；
+23. 随机种子设置；
+24. use_adaptive_position_aug=False 时的原始 KGSCL 行为。
+
+禁止事项：
+1. 不要修改模型结构；
+2. 不要修改损失函数；
+3. 不要降低增强比例；
+4. 不要减少 batch size；
+5. 不要缩短序列；
+6. 不要减少训练样本；
+7. 不要改用近似关系分数；
+8. 不要删除 fallback；
+9. 不要将 sample 模式改成 topk；
+10. 不要为了速度改变采样概率分布；
+11. 不要引入多正样本、KAST、假负样本过滤、GNN、扩散、多意图、超图或傅里叶模块；
+12. 不要重构无关代码；
+13. 不要仅通过减少日志输出掩盖核心计算瓶颈；
+14. 不要改变 use_adaptive_position_aug=False 的结果。
+
+==================================================
+一、先定位并量化真实性能瓶颈
+==================================================
+
+请先完整阅读当前代码，重点搜索：
+
+use_adaptive_position_aug
+compute_position_importance
+compute_kg_reliability_for_sequence
+sub_reliability
+ins_reliability
+reliability_table
+compute_adaptive_position_scores
+select_adaptive_positions
+get_relation_neighbors
+get_correlation_score
+adaptive_substitute_position
+adaptive_insert_position
+position_mode
+fallback
+torch.multinomial
+random.sample
+cpu
+tolist
+item
+numpy
+for b in range
+for item in
+for position in
+register_buffer
+calculate_loss
+forward
+encode_sequence
+return_all_hidden
+
+在修改代码之前，先添加轻量计时或使用 torch.profiler，对以下阶段分别计时：
+
+1. original sequence encoding；
+2. position importance calculation；
+3. substitute reliability calculation；
+4. insert reliability calculation；
+5. substitute position score calculation；
+6. insert position score calculation；
+7. substitute position selection；
+8. insert position selection；
+9. KG-Substitute sequence construction；
+10. KG-Insert sequence construction；
+11. augmented views encoding；
+12. loss calculation；
+13. logging/statistics；
+14. CPU 到 GPU 或 GPU 到 CPU 数据传输；
+15. adaptive module 总时间。
+
+计时要求：
+- CUDA 计时前后使用 torch.cuda.synchronize()，仅在 profiling 模式启用；
+- 正常训练时关闭同步计时，避免计时本身拖慢训练；
+- 增加配置 use_adaptive_profile，默认 False；
+- profile 只运行若干 batch，例如 20 个 batch；
+- 输出平均每个 batch 的阶段耗时；
+- 不要在每个 batch 打印大量日志。
+
+先确认瓶颈是否来自以下问题：
+1. 每个 batch 对每个样本、每个位置遍历 relation set；
+2. 每个 batch 重复计算 item-level KG reliability；
+3. 每次调用都把 tensor 转成 Python list；
+4. 在循环中频繁调用 .item()、.cpu()、.numpy() 或 .tolist()；
+5. 在循环中反复创建 torch.tensor；
+6. 每个位置都调用 get_relation_neighbors；
+7. 每个候选邻居都调用 get_correlation_score；
+8. 额外重复编码原始序列；
+9. 统计日志导致频繁 GPU 同步；
+10. 自适应位置选择中存在三层 Python 循环。
+
+只有在完成瓶颈确认后再开始优化。
+
+==================================================
+二、最高优先级：预计算并缓存 item-level KG reliability
+==================================================
+
+当前公式必须保持不变：
+
+Substitute reliability：
+K_sub(i) = max 或 mean { Cor(i, j) | j 属于 substitution neighbors of i }
+
+Insert reliability：
+K_ins(i) = max 或 mean { Cor(i, j) | j 属于 complementary neighbors of i }
+
+问题：
+这些 reliability 只由 item id、relation set、correlation score 和 agg 方式决定，与 batch、epoch 和当前 hidden state 无关，因此不能在每个 batch 中重复扫描知识图谱。
+
+请实现一次性预计算：
+
+sub_reliability_table[item_id]
+ins_reliability_table[item_id]
+
+要求：
+
+1. 在数据加载完成、模型初始化或训练开始前只计算一次；
+2. 表长度必须与 item embedding 的行数一致；
+3. padding id 的 reliability 为 0；
+4. 非法 item id 不写入；
+5. relation set 中若包含 item 自身，沿用当前模块的原有过滤规则；
+6. agg=max 时结果必须与原实现一致；
+7. agg=mean 时结果必须与原实现一致；
+8. correlation 缺失时沿用当前代码的默认值；
+9. 不改变 normalization 规则；
+10. 预计算结果保存为 torch.float32 Tensor；
+11. 使用 register_buffer 注册到模型中，建议 persistent=False；
+12. buffer 自动跟随 model.to(device) 移动到 GPU；
+13. 不作为可训练参数；
+14. 不参与梯度计算；
+15. 避免每个 batch 从 CPU 重复拷贝到 GPU。
+
+建议结构：
+
+self.register_buffer(
+    "sub_reliability_table",
+    precomputed_sub_reliability_tensor,
+    persistent=False
+)
+
+self.register_buffer(
+    "ins_reliability_table",
+    precomputed_ins_reliability_tensor,
+    persistent=False
+)
+
+训练时必须直接通过索引取得：
+
+sub_reliability = self.sub_reliability_table[item_seq]
+ins_reliability = self.ins_reliability_table[item_seq]
+
+其中：
+- item_seq shape 为 [B, L]；
+- 输出 shape 为 [B, L]；
+- 不允许再次遍历 relation set；
+- 不允许再次调用 get_relation_neighbors；
+- 不允许在 batch 内再次扫描 correlation score。
+
+如果当前 normalization 是“每个样本在有效位置上做 min-max normalization”，仍然保留该步骤，但只对索引得到的 [B, L] reliability 做张量归一化。
+
+如果当前代码已经存在 reliability table：
+1. 检查是否真的只构建一次；
+2. 检查是否每个 batch 又重新转换成 tensor；
+3. 检查是否仍在 CPU；
+4. 检查是否每个 batch重复做 Python 字典查询；
+5. 修复这些问题。
+
+==================================================
+三、向量化 position importance，移除逐样本位置循环
+==================================================
+
+原公式保持不变：
+
+I_i = similarity(h_i, h_u)
+
+其中：
+- h_i 为每个有效位置的 hidden state；
+- h_u 为最后一个有效位置的 hidden state；
+- similarity 保持 cosine 或 dot；
+- 每个样本在有效位置上做 min-max normalization；
+- padding 位置为 0；
+- 相同值和长度为 1 的特殊处理保持当前功能不变。
+
+必须实现纯张量计算，避免：
+
+for b in range(batch_size):
+    values = ...
+    min(...)
+    max(...)
+
+建议向量化实现：
+
+1. seq_mask shape [B, L]；
+2. 使用 position_ids 和 masked max 获取最后一个有效位置；
+3. 通过 gather 获取 user_repr；
+4. 一次性计算 [B, L] raw importance；
+5. masked_min：将 padding 位置填为 +inf，再沿 dim=1 取 min；
+6. masked_max：将 padding 位置填为 -inf，再沿 dim=1 取 max；
+7. denominator = max - min；
+8. 正常样本：(raw - min) / (denominator + eps)；
+9. denominator 过小的样本：按当前逻辑，将最后一个有效位置设置为 1，其余有效位置设置为 0；
+10. padding 位置最终设置为 0。
+
+禁止：
+- 对 batch 逐样本循环；
+- 对位置逐元素循环；
+- 每个 batch 反复创建 position_ids；
+- 频繁调用 .item()。
+
+可以缓存 position_ids：
+如果 max_len 固定，可注册或缓存 [1, L] 的 position_ids，并按 batch expand。
+
+==================================================
+四、向量化 reliability normalization
+==================================================
+
+从缓存表索引后得到：
+
+sub_reliability_raw = sub_table[item_seq]
+ins_reliability_raw = ins_table[item_seq]
+
+请保留原有“每个样本、有效位置范围内 min-max normalization”的功能，但改为向量化 masked min-max。
+
+要求：
+1. padding 为 0；
+2. 全 0 样本保持全 0；
+3. 不产生 NaN；
+4. 不使用 Python batch 循环；
+5. 不改变 reliability 数值语义。
+
+建议实现通用函数：
+
+masked_minmax_normalize(values, mask, zero_when_constant=True, eps=1e-8)
+
+用于：
+- position importance；
+- substitute reliability；
+- insert reliability；
+- 如果当前实现还对 position scores 再归一化，也可复用。
+
+==================================================
+五、位置评分必须保持纯张量操作
+==================================================
+
+公式保持不变：
+
+sub_scores = sub_reliability * (1.0 - importance)
+ins_scores = ins_reliability * importance
+
+要求：
+1. 一次性计算 [B, L]；
+2. padding mask 后设为 0；
+3. 不使用 Python 循环；
+4. importance 和 reliability 使用 detach；
+5. 位置选择前不执行 .cpu().tolist()；
+6. 不创建多余副本；
+7. 在 torch.no_grad() 中执行。
+
+==================================================
+六、优化位置选择，但不得改变采样语义
+==================================================
+
+必须保留：
+- position_select_mode=sample 时仍然是按 softmax 概率无放回采样；
+- position_select_mode=topk 时仍然是 Top-K；
+- k = ceil(ratio * valid_length)；
+- fallback 逻辑不变；
+- 非零位置不足 k 时的补齐逻辑不变；
+- 不选择 padding；
+- 不重复选择同一位置。
+
+优先级如下：
+
+第一优先级：
+先保留当前位置选择算法，只移除 relation/correlation 的逐位置查询。
+如果运行时间已经接近原始 KGSCL，则不要继续做高风险重构。
+
+第二优先级：
+如果 position selection 仍是明显瓶颈，可按相同 k 对 batch 行分组。
+
+原因：
+torch.multinomial 对二维概率矩阵可一次处理同样 num_samples 的多行。
+
+实现建议：
+1. 计算每个样本 k；
+2. 按 k 的不同取值分组；
+3. 对同一个 k 的样本组成概率矩阵；
+4. 一次调用 torch.multinomial(prob_matrix, k, replacement=False)；
+5. 再映射回原 batch 行；
+6. fallback 样本单独处理；
+7. 保持每个样本的概率分布和无放回语义不变。
+
+注意：
+- 不要求与旧实现逐位完全相同的随机抽样结果，因为批量 multinomial 会改变 RNG 消耗顺序；
+- 但必须保证相同概率分布、相同无放回规则、相同 k 和相同 fallback 语义；
+- 如果项目要求严格复现实验，保留旧选择路径作为 legacy 模式；
+- 增加 adaptive_position_selection_impl：legacy 或 grouped；
+- 默认先使用 grouped，但 use_adaptive_position_aug=False 不受影响。
+
+如果 grouped 实现风险过高，允许保留 batch 级循环，但绝对不能保留“batch × position × neighbors”的多层循环。
+
+==================================================
+七、减少 CPU/GPU 同步与数据转换
+==================================================
+
+检查自适应模块中所有：
+
+.item()
+.cpu()
+.tolist()
+.numpy()
+torch.tensor(...)
+list(...)
+dict 查询
+print(...)
+logger.info(...)
+
+要求：
+
+1. position importance、reliability、score 全程保留在 GPU；
+2. 只在最终增强函数确实需要 Python position list 时，才转换最终 selected positions；
+3. 每个 batch 最多做一次必要的 selected positions 转换；
+4. 不要把完整 [B, L] 分数矩阵转到 CPU；
+5. 不要在每个 batch 对统计指标调用多次 .item()；
+6. 统计量在 GPU 上累计；
+7. epoch 结束时再统一 .item()；
+8. debug 样本打印默认关闭；
+9. profiling 关闭时不执行 torch.cuda.synchronize()；
+10. 不在循环中反复构造同样的 tensor。
+
+如果 augmentation 函数可以接收 Tensor：
+优先让 selected_positions 保持 LongTensor，而不是 Python List[List[int]]。
+
+但不能改变 augmentation 最终行为。
+如果修改 augmentation 输入接口风险较大，则只转换最终位置索引，不转换 importance、reliability 或 score。
+
+==================================================
+八、优化统计日志，功能保持不变
+==================================================
+
+当前日志需要保留：
+
+avg_sub_selected_importance
+avg_sub_selected_reliability
+avg_sub_selected_score
+avg_ins_selected_importance
+avg_ins_selected_reliability
+avg_ins_selected_score
+sub_fallback_ratio
+ins_fallback_ratio
+avg_sub_position_from_end
+avg_ins_position_from_end
+
+但实现方式需要优化。
+
+禁止每个 batch：
+- 多次 .item()；
+- 多次 GPU 同步；
+- 对每个选中位置做 Python 求和；
+- 逐样本 logger 输出。
+
+请改为：
+
+1. 在 GPU 上用 tensor 累计 sum 和 count；
+2. fallback 使用 bool tensor 累计；
+3. position_from_end 使用 tensor 计算；
+4. epoch 结束时统一转换为 Python float；
+5. 每个 epoch只打印一次；
+6. debug 样本日志通过 adaptive_debug_samples 控制，默认 0。
+
+日志内容不变，只优化计算方式。
+
+==================================================
+九、确认原始序列没有被重复编码
+==================================================
+
+检查启用自适应位置增强后，是否出现：
+
+1. 第一次 forward 获取 hidden states；
+2. 第二次 forward 又获取 original user representation；
+3. 第三次 forward 才用于推荐损失。
+
+必须保证：
+原始序列只编码一次。
+
+第一次编码得到：
+- all_hidden；
+- user_repr。
+
+同一份结果复用于：
+1. position importance；
+2. recommendation loss；
+3. View-View CL 中的 original representation。
+
+增强视图按照原始 KGSCL 的需要编码，不减少，也不增加。
+
+请在 profiling 日志中输出：
+original_forward_count_per_batch
+augmented_forward_count_per_batch
+
+并确认：
+- original forward count 与设计一致；
+- 自适应模块没有新增多余 original forward。
+
+==================================================
+十、缓存对象的生命周期与设备管理
+==================================================
+
+reliability table 必须满足：
+
+1. 每次训练任务只构建一次；
+2. 每个 epoch 不重建；
+3. 每个 batch 不重建；
+4. 自动移动到当前 device；
+5. checkpoint 保存行为明确；
+6. 若 persistent=False，不影响模型参数保存；
+7. 多 GPU 或 DataParallel 场景尽量兼容；
+8. item 数量变化时重新构建；
+9. dataset 变化时重新构建；
+10. kg_reliability_agg 变化时重新构建。
+
+建议添加日志：
+
+Built sub_reliability_table once: shape=..., time=...
+Built ins_reliability_table once: shape=..., time=...
+Reliability table device: ...
+Reliability table rebuild count: 1
+
+如果 rebuild count 大于 1，视为实现错误，除非明确切换数据集或配置。
+
+==================================================
+十一、保持 fallback 与关系语义完全不变
+==================================================
+
+不能因为缓存而改变：
+
+1. 无 substitution neighbor 的 item；
+2. 无 complementary neighbor 的 item；
+3. correlation 缺失时的默认分数；
+4. relation set 中原 item 自身的处理；
+5. 全 reliability 为 0 的样本；
+6. 非零位置不足 k 的样本；
+7. random fallback；
+8. original fallback；
+9. Item-Repeat fallback；
+10. 插入后的索引处理。
+
+请对比优化前后至少 100 个 batch，验证：
+
+- 每个样本选择位置数量一致；
+- 选择位置都有效；
+- padding 从未被选择；
+- fallback 触发条件一致；
+- reliability table 索引值与旧逐项计算值一致；
+- position importance 与旧实现数值一致；
+- score 与旧实现数值一致。
+
+数值误差标准：
+float32 下最大绝对误差建议小于 1e-6。
+如果是不同计算顺序导致，允许小于 1e-5，但必须说明。
+
+==================================================
+十二、回归测试
+==================================================
+
+A. 原始 KGSCL 模式
+
+配置：
+use_adaptive_position_aug=False
+seed=42
+
+要求：
+1. 运行路径不进入自适应 reliability 和 position selection；
+2. 不构建不必要的 GPU batch reliability；
+3. loss 与修改前一致；
+4. 单 epoch 时间不应明显增加；
+5. 参数数量不变；
+6. 结果与修改前基本一致。
+
+B. 自适应模式数值回归
+
+配置：
+use_adaptive_position_aug=True
+position_select_mode=sample
+position_temperature=0.5
+position_importance_sim=cosine
+kg_reliability_agg=max
+adaptive_position_warmup_epochs=5
+adaptive_position_fallback=random
+adaptive_substitute_position=True
+adaptive_insert_position=True
+seed=42
+
+要求：
+1. 公式不变；
+2. 增强数量不变；
+3. warm-up 行为不变；
+4. fallback 行为不变；
+5. loss 计算不变；
+6. 位置分数数值与旧实现一致；
+7. 训练可正常 backward；
+8. 不产生 NaN。
+
+C. 长度边界测试
+
+至少测试：
+- 长度为 1；
+- 长度为 2；
+- 平均长度附近；
+- max_len；
+- 左 padding；
+- 右 padding；
+- 全 0 reliability；
+- 部分 item 无 KG neighbor；
+- substitute_ratio=0；
+- insert_ratio=0。
+
+D. 设备测试
+
+至少确认：
+- CPU 可运行最小 batch；
+- CUDA 可运行；
+- reliability table 与 item_seq 在同一 device；
+- 不出现 device mismatch。
+
+==================================================
+十三、性能验收标准
+==================================================
+
+请用相同机器、相同数据集、相同 seed、相同 batch size、相同配置进行比较。
+
+已知参考：
+- 原始 KGSCL：约 134～140 秒/epoch；
+- 优化前自适应版本：约 576～581 秒/epoch。
+
+要求输出：
+
+1. 优化前每阶段耗时；
+2. 优化后每阶段耗时；
+3. reliability 预计算时间；
+4. 单 epoch 总时间；
+5. 相对原始 KGSCL 的时间倍率；
+6. 相对优化前的加速比；
+7. GPU 显存变化；
+8. CPU 内存变化；
+9. original forward 次数；
+10. fallback ratio 是否一致。
+
+目标：
+- 优先将自适应版本降低到 200 秒/epoch以内；
+- 理想目标为不超过原始 KGSCL 的 1.3～1.5 倍；
+- 若未达到目标，必须继续报告剩余最大瓶颈；
+- 不允许通过改变功能达到时间目标。
+
+性能测量要求：
+1. 排除首次 reliability table 构建时间；
+2. 排除第一个 CUDA warm-up batch；
+3. 至少统计 3 个完整 epoch 的平均值；
+4. 关闭 profiler 后再测最终时间；
+5. 保持日志级别一致；
+6. 不同时运行其他任务。
+
+==================================================
+十四、建议的实现顺序
+==================================================
+
+请按以下顺序修改，每一步都做计时：
+
+步骤 1：确认没有额外 original forward。
+步骤 2：预计算 sub_reliability_table 和 ins_reliability_table。
+步骤 3：训练时改成 table[item_seq] 索引。
+步骤 4：向量化 masked min-max normalization。
+步骤 5：向量化 position importance。
+步骤 6：向量化 position scores。
+步骤 7：优化统计量累计，减少 .item() 和同步。
+步骤 8：重新计时。
+步骤 9：只有 position selection 仍是主要瓶颈时，才实现 grouped multinomial。
+步骤 10：完成回归测试与最终 benchmark。
+
+不要一开始就大规模重写所有 augmentation 代码。
+优先做低风险、高收益的缓存和向量化。
+
+==================================================
+十五、代码质量要求
+==================================================
+
+1. 新增函数必须有 docstring；
+2. 标注关键 tensor shape；
+3. 不使用隐藏全局状态；
+4. 不重复构建缓存；
+5. 不引入不必要依赖；
+6. 不修改无关文件；
+7. 不删除旧逻辑，必要时保留 legacy 实现用于数值对比；
+8. 新增配置默认不改变当前用户配置；
+9. use_adaptive_position_aug=False 时不增加额外 batch 计算；
+10. profiler 默认关闭；
+11. debug 默认关闭；
+12. 所有修改文件通过 py_compile；
+13. 遵循当前项目命名与代码风格；
+14. 不使用会导致 autograd 错误的 inplace 操作；
+15. reliability table 和位置选择在 no_grad 中；
+16. 不把 buffer 误设为 Parameter。
+
+==================================================
+十六、最终交付内容
+==================================================
+
+修改完成后，请输出：
+
+1. 修改了哪些文件；
+2. 原始性能瓶颈在哪里；
+3. 每个瓶颈占用多少时间；
+4. 新增了哪些缓存；
+5. reliability table 在哪里构建；
+6. reliability table 是否只构建一次；
+7. reliability table 如何注册到模型；
+8. position importance 如何向量化；
+9. reliability normalization 如何向量化；
+10. position selection 是否修改；
+11. 是否保留原采样语义；
+12. 是否减少 CPU/GPU 同步；
+13. 是否减少 .item()/.tolist()；
+14. 原始序列 forward 次数；
+15. 优化前后单 epoch 时间；
+16. 加速比；
+17. 显存变化；
+18. use_adaptive_position_aug=False 的回归结果；
+19. 自适应模式数值一致性测试；
+20. py_compile 结果；
+21. 最小 batch forward/backward 结果；
+22. 完整运行命令。
+
+==================================================
+十七、运行命令
+==================================================
+
+请根据当前项目实际入口和参数格式，给出以下两套完整命令。
+
+基线：
+
+use_adaptive_position_aug=False
+seed=42
+
+优化后的自适应版本：
+
+use_adaptive_position_aug=True
+position_select_mode=sample
+position_temperature=0.5
+position_importance_sim=cosine
+kg_reliability_agg=max
+adaptive_position_warmup_epochs=5
+adaptive_position_fallback=random
+adaptive_substitute_position=True
+adaptive_insert_position=True
+seed=42
+
+两套命令除 use_adaptive_position_aug 相关配置外，其他超参数必须完全一致。
+
+==================================================
+十八、任务边界
+==================================================
+
+本次只做“运行时间优化”。
+
+允许修改：
+- reliability 预计算与缓存；
+- tensor device 管理；
+- masked normalization 向量化；
+- position importance 向量化；
+- position score 向量化；
+- 统计量向量化；
+- 减少 CPU/GPU 同步；
+- 在不改变采样语义的前提下批量化 position selection；
+- profiler 和 benchmark 代码。
+
+不允许修改：
+- 算法公式；
+- 模型结构；
+- 损失函数；
+- 增强比例；
+- 关系类型；
+- correlation 定义；
+- 候选邻居采样；
+- target substitution；
+- warm-up；
+- fallback；
+- 数据处理；
+- 评价指标；
+- full-ranking；
+- early stopping；
+- 训练轮数；
+- batch size；
+- 学习率；
+- 任何影响模型性能定义的功能。
+
+请先 profiling，再做最小侵入式优化。
+优化结果必须以“功能不变、数值一致、速度显著提升”为验收标准。

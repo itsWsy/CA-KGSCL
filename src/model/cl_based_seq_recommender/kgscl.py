@@ -3,6 +3,7 @@
 import copy
 import logging
 import random
+import time
 import numpy as np
 import torch.nn.functional as F
 from easydict import EasyDict
@@ -41,10 +42,14 @@ class KGSCL(AbstractRecommender):
         self.adaptive_position_fallback = config.adaptive_position_fallback
         self.adaptive_substitute_position = config.adaptive_substitute_position
         self.adaptive_insert_position = config.adaptive_insert_position
+        self.use_adaptive_profile = config.use_adaptive_profile
+        self.adaptive_profile_batches = config.adaptive_profile_batches
         self.kg_relation_dict = kg_map.get('kg_relation_dict', {}) if isinstance(kg_map, dict) else {}
         self.co_occurrence_dict = kg_map.get('co_occurrence_dict', {}) if isinstance(kg_map, dict) else {}
         self._loss_logged_epochs = set()
         self._position_logged_epochs = set()
+        self._profile_batch_count = 0
+        self._profile_time = {}
 
         self.initializer_range = config.initializer_range
         self.item_embedding = nn.Embedding(self.num_items, self.embed_size, padding_idx=0)
@@ -61,8 +66,17 @@ class KGSCL(AbstractRecommender):
         self.nce_loss = InfoNCELoss(temperature=self.tem1,
                                     similarity_type=config.sim)
         self.cross_entropy = nn.CrossEntropyLoss()
-        self.register_buffer('sub_reliability_table', self._build_reliability_table('s'))
-        self.register_buffer('ins_reliability_table', self._build_reliability_table('c'))
+        if self.use_adaptive_position_aug:
+            start_time = time.perf_counter()
+            self.register_buffer('sub_reliability_table', self._build_reliability_table('s'), persistent=False)
+            self.register_buffer('ins_reliability_table', self._build_reliability_table('c'), persistent=False)
+            logging.info(f'Built reliability tables once: shape={self.sub_reliability_table.size()}, '
+                         f'time={time.perf_counter() - start_time:.4f}s')
+        else:
+            self.register_buffer('sub_reliability_table', torch.zeros(self.num_items, dtype=torch.float),
+                                 persistent=False)
+            self.register_buffer('ins_reliability_table', torch.zeros(self.num_items, dtype=torch.float),
+                                 persistent=False)
 
         self.apply(self._init_weights)
         logging.info(f'use_mp_vt = {self.use_mp_vt}')
@@ -75,6 +89,7 @@ class KGSCL(AbstractRecommender):
         logging.info(f'kg_reliability_agg = {self.kg_reliability_agg}')
         logging.info(f'adaptive_position_warmup_epochs = {self.adaptive_position_warmup_epochs}')
         logging.info(f'adaptive_position_fallback = {self.adaptive_position_fallback}')
+        logging.info(f'use_adaptive_profile = {self.use_adaptive_profile}')
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Embedding, nn.Linear)):
@@ -101,16 +116,20 @@ class KGSCL(AbstractRecommender):
 
         # original seq encoding
         if use_adaptive:
+            self._profile_start('original_sequence_encoding')
             seq_hidden, seq_embedding = self.preference_encoding(item_seq, seq_len, return_all_hidden=True)
+            self._profile_stop('original_sequence_encoding')
             v2v_aug_seq, v2v_aug_len, v2t_aug_seq, v2t_aug_len, position_stats = \
                 self.build_adaptive_augmented_views(item_seq, seq_len, seq_hidden.detach())
         else:
             seq_embedding = self.preference_encoding(item_seq, seq_len)  # [B, D]
             position_stats = None
         # v2v aug seq encoding
+        self._profile_start('augmented_views_encoding')
         v2v_seq_embedding = self.preference_encoding(v2v_aug_seq, v2v_aug_len)  # [B, D]
         # v2t aug seq encoding
         v2t_seq_embedding = self.preference_encoding(v2t_aug_seq, v2t_aug_len)  # [B, D]
+        self._profile_stop('augmented_views_encoding')
 
         # rec loss
         logits = seq_embedding @ self.item_embedding.weight.t()
@@ -163,6 +182,8 @@ class KGSCL(AbstractRecommender):
                     f'avg_ins_position_from_end={position_stats["ins_from_end"]:.4f}'
                 )
 
+        if use_adaptive:
+            self._profile_report()
         return rec_loss + self.lamda1 * v2v_loss + self.lamda2 * v2t_loss
 
     def _build_reliability_table(self, relation_type):
@@ -196,34 +217,48 @@ class KGSCL(AbstractRecommender):
         """PAKA: build two KG augmented views using adaptive position selection."""
         with torch.no_grad():
             seq_mask = item_seq.ne(0)
+            self._profile_start('position_importance')
             importance, _ = compute_position_importance(
                 seq_hidden,
                 seq_mask,
                 similarity=self.position_importance_sim
             )
+            self._profile_stop('position_importance')
+            self._profile_start('sub_reliability')
             sub_reliability = compute_kg_reliability_for_sequence(
                 item_seq, seq_mask, self.sub_reliability_table, agg=self.kg_reliability_agg, pad_id=0
             )
+            self._profile_stop('sub_reliability')
+            self._profile_start('ins_reliability')
             ins_reliability = compute_kg_reliability_for_sequence(
                 item_seq, seq_mask, self.ins_reliability_table, agg=self.kg_reliability_agg, pad_id=0
             )
+            self._profile_stop('ins_reliability')
+            self._profile_start('position_scores')
             sub_scores = compute_adaptive_position_scores(importance, sub_reliability, seq_mask, mode='substitute')
             ins_scores = compute_adaptive_position_scores(importance, ins_reliability, seq_mask, mode='insert')
+            self._profile_stop('position_scores')
 
-            sub_positions, sub_fallback = select_adaptive_positions(
+            self._profile_start('sub_position_selection')
+            sub_positions, sub_fallback, sub_selected_mask = select_adaptive_positions(
                 sub_scores, seq_mask, self.substitute_ratio, mode=self.position_select_mode,
-                temperature=self.position_temperature, fallback=self.adaptive_position_fallback
+                temperature=self.position_temperature, fallback=self.adaptive_position_fallback, return_mask=True
             )
-            ins_positions, ins_fallback = select_adaptive_positions(
+            self._profile_stop('sub_position_selection')
+            self._profile_start('ins_position_selection')
+            ins_positions, ins_fallback, ins_selected_mask = select_adaptive_positions(
                 ins_scores, seq_mask, self.insert_ratio, mode=self.position_select_mode,
-                temperature=self.position_temperature, fallback=self.adaptive_position_fallback
+                temperature=self.position_temperature, fallback=self.adaptive_position_fallback, return_mask=True
             )
+            self._profile_stop('ins_position_selection')
 
+            self._profile_start('adaptive_sequence_construction')
             view_1, len_1, types_1 = self._build_one_adaptive_view(item_seq, sub_positions, ins_positions)
             view_2, len_2, types_2 = self._build_one_adaptive_view(item_seq, sub_positions, ins_positions)
+            self._profile_stop('adaptive_sequence_construction')
             stats = self._summarize_position_stats(
                 importance, sub_reliability, ins_reliability, sub_scores, ins_scores,
-                sub_positions, ins_positions, sub_fallback, ins_fallback, seq_mask
+                sub_selected_mask, ins_selected_mask, sub_fallback, ins_fallback, seq_mask
             )
 
         return view_1, len_1, view_2, len_2, stats
@@ -309,37 +344,66 @@ class KGSCL(AbstractRecommender):
         return new_item_seq
 
     def _summarize_position_stats(self, importance, sub_reliability, ins_reliability, sub_scores, ins_scores,
-                                  sub_positions, ins_positions, sub_fallback, ins_fallback, seq_mask):
-        def avg_selected(matrix, positions):
-            values = []
-            matrix_cpu = matrix.detach().cpu()
-            for batch_idx, pos_list in enumerate(positions):
-                values.extend([float(matrix_cpu[batch_idx, pos]) for pos in pos_list])
-            return sum(values) / len(values) if len(values) > 0 else 0.
+                                  sub_selected_mask, ins_selected_mask, sub_fallback, ins_fallback, seq_mask):
+        """PAKA: summarize selected-position diagnostics with tensor reductions."""
+        def avg_selected(matrix, selected_mask):
+            count = selected_mask.float().sum().clamp_min(1.0)
+            return float((matrix * selected_mask.float()).sum().detach().cpu() / count.detach().cpu())
 
-        def avg_from_end(positions):
-            values = []
-            mask_cpu = seq_mask.detach().cpu()
-            for batch_idx, pos_list in enumerate(positions):
-                valid = torch.nonzero(mask_cpu[batch_idx], as_tuple=False).view(-1)
-                if valid.numel() == 0:
-                    continue
-                last_pos = int(valid.max().item())
-                values.extend([float(last_pos - pos) for pos in pos_list])
-            return sum(values) / len(values) if len(values) > 0 else 0.
+        def avg_from_end(selected_mask):
+            batch_size, max_len = selected_mask.size()
+            pos_ids = torch.arange(max_len, device=selected_mask.device).unsqueeze(0).expand(batch_size, max_len)
+            last_pos = pos_ids.masked_fill(~seq_mask, -1).max(dim=1).values.unsqueeze(1)
+            distance = (last_pos - pos_ids).float().clamp_min(0.0)
+            count = selected_mask.float().sum().clamp_min(1.0)
+            return float((distance * selected_mask.float()).sum().detach().cpu() / count.detach().cpu())
 
+        sub_fallback_tensor = torch.tensor(sub_fallback, dtype=torch.float, device=importance.device)
+        ins_fallback_tensor = torch.tensor(ins_fallback, dtype=torch.float, device=importance.device)
         return {
-            'sub_importance': avg_selected(importance, sub_positions),
-            'sub_reliability': avg_selected(sub_reliability, sub_positions),
-            'sub_score': avg_selected(sub_scores, sub_positions),
-            'ins_importance': avg_selected(importance, ins_positions),
-            'ins_reliability': avg_selected(ins_reliability, ins_positions),
-            'ins_score': avg_selected(ins_scores, ins_positions),
-            'sub_fallback_ratio': sum(sub_fallback) / len(sub_fallback) if len(sub_fallback) > 0 else 0.,
-            'ins_fallback_ratio': sum(ins_fallback) / len(ins_fallback) if len(ins_fallback) > 0 else 0.,
-            'sub_from_end': avg_from_end(sub_positions),
-            'ins_from_end': avg_from_end(ins_positions)
+            'sub_importance': avg_selected(importance, sub_selected_mask),
+            'sub_reliability': avg_selected(sub_reliability, sub_selected_mask),
+            'sub_score': avg_selected(sub_scores, sub_selected_mask),
+            'ins_importance': avg_selected(importance, ins_selected_mask),
+            'ins_reliability': avg_selected(ins_reliability, ins_selected_mask),
+            'ins_score': avg_selected(ins_scores, ins_selected_mask),
+            'sub_fallback_ratio': float(sub_fallback_tensor.mean().detach().cpu()) if sub_fallback_tensor.numel() else 0.,
+            'ins_fallback_ratio': float(ins_fallback_tensor.mean().detach().cpu()) if ins_fallback_tensor.numel() else 0.,
+            'sub_from_end': avg_from_end(sub_selected_mask),
+            'ins_from_end': avg_from_end(ins_selected_mask)
         }
+
+    def _profile_start(self, name):
+        if not self.use_adaptive_profile or self._profile_batch_count >= self.adaptive_profile_batches:
+            return
+        if self.item_embedding.weight.is_cuda:
+            torch.cuda.synchronize(self.item_embedding.weight.device)
+        self._profile_time[f'{name}_start'] = time.perf_counter()
+
+    def _profile_stop(self, name):
+        if not self.use_adaptive_profile or self._profile_batch_count >= self.adaptive_profile_batches:
+            return
+        if self.item_embedding.weight.is_cuda:
+            torch.cuda.synchronize(self.item_embedding.weight.device)
+        start = self._profile_time.pop(f'{name}_start', None)
+        if start is None:
+            return
+        total, count = self._profile_time.get(name, (0.0, 0))
+        self._profile_time[name] = (total + time.perf_counter() - start, count + 1)
+
+    def _profile_report(self):
+        if not self.use_adaptive_profile:
+            return
+        self._profile_batch_count += 1
+        if self._profile_batch_count != self.adaptive_profile_batches:
+            return
+        parts = []
+        for key, value in self._profile_time.items():
+            if key.endswith('_start'):
+                continue
+            total, count = value
+            parts.append(f'{key}={total / max(count, 1):.6f}s')
+        logging.info('Adaptive profile average per batch: ' + ', '.join(parts))
 
     def forward(self, item_seq, seq_len, *args, **kwargs):
         item_vectors = self.position_encoding(item_seq)
@@ -406,6 +470,8 @@ def KGSCL_config():
     parser.add_argument('--adaptive_position_fallback', default='random', type=str, choices=['random', 'original'])
     parser.add_argument('--adaptive_substitute_position', default=True, action='store_false')
     parser.add_argument('--adaptive_insert_position', default=True, action='store_false')
+    parser.add_argument('--use_adaptive_profile', default=False, action='store_true')
+    parser.add_argument('--adaptive_profile_batches', default=20, type=int)
     parser.add_argument('--kg_data_type', default='other', type=str, choices=['pretrain', 'jointly_train', 'other'])
     parser.add_argument('--loss_type', default='CUSTOM', type=str, choices=['CE', 'BPR', 'BCE', 'CUSTOM'])
 

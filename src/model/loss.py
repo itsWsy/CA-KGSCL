@@ -116,6 +116,31 @@ def get_last_valid_indices(seq_mask):
     return last_indices.clamp_min(0)
 
 
+def masked_minmax_normalize(values, mask, eps=1e-8, constant_last_indices=None, positive_constant_one=False):
+    """PAKA: vectorized per-row min-max normalization for [B, L] tensors."""
+    pos_inf = torch.finfo(values.dtype).max
+    neg_inf = torch.finfo(values.dtype).min
+    masked_min = values.masked_fill(~mask, pos_inf).min(dim=1, keepdim=True).values
+    masked_max = values.masked_fill(~mask, neg_inf).max(dim=1, keepdim=True).values
+    valid_rows = mask.any(dim=1, keepdim=True)
+    denom = masked_max - masked_min
+    normalized = (values - masked_min) / (denom + eps)
+    normalized = torch.where(valid_rows, normalized, torch.zeros_like(normalized))
+    normalized = normalized.masked_fill(~mask, 0.0)
+    normalized = torch.nan_to_num(normalized, nan=0.0, posinf=0.0, neginf=0.0)
+
+    constant_rows = valid_rows.squeeze(1) & (denom.squeeze(1).abs() < eps)
+    if constant_last_indices is not None and constant_rows.any():
+        normalized[constant_rows] = 0.0
+        row_index = torch.nonzero(constant_rows, as_tuple=False).view(-1)
+        normalized[row_index, constant_last_indices[row_index]] = 1.0
+    elif positive_constant_one and constant_rows.any():
+        positive_rows = constant_rows.unsqueeze(1) & values.gt(0) & mask
+        normalized = torch.where(positive_rows, torch.ones_like(normalized), normalized)
+
+    return normalized.masked_fill(~mask, 0.0)
+
+
 def compute_position_importance(hidden_states, seq_mask, seq_lengths=None, similarity="cosine", eps=1e-8):
     """PAKA: compute normalized position importance, hidden_states is [B, L, D]."""
     batch_size = hidden_states.size(0)
@@ -136,46 +161,17 @@ def compute_position_importance(hidden_states, seq_mask, seq_lengths=None, simil
         raise ValueError("position_importance_sim should be cosine or dot")
 
     raw_score = raw_score.masked_fill(~seq_mask, 0.0)
-    importance = torch.zeros_like(raw_score)
-
-    for batch_idx in range(batch_size):
-        valid = seq_mask[batch_idx]
-        if valid.sum() == 0:
-            continue
-        values = raw_score[batch_idx][valid]
-        value_min = values.min()
-        value_max = values.max()
-        if (value_max - value_min).abs() < eps:
-            normalized = torch.zeros_like(values)
-            normalized[-1] = 1.0
-        else:
-            normalized = (values - value_min) / (value_max - value_min + eps)
-        importance[batch_idx][valid] = normalized
-
-    return importance.masked_fill(~seq_mask, 0.0), user_repr
+    importance = masked_minmax_normalize(raw_score, seq_mask, eps=eps, constant_last_indices=last_indices)
+    return importance, user_repr
 
 
 def compute_kg_reliability_for_sequence(item_seq, seq_mask, reliability_table, agg="max", pad_id=0):
     """PAKA: index precomputed item-level reliability and normalize per sequence."""
     reliability = reliability_table[item_seq.clamp_min(0)].float()
     reliability = reliability.masked_fill(~seq_mask, 0.0)
-    normalized = torch.zeros_like(reliability)
-
-    for batch_idx in range(item_seq.size(0)):
-        valid = seq_mask[batch_idx]
-        if valid.sum() == 0:
-            continue
-        values = reliability[batch_idx][valid]
-        if values.max() <= 0:
-            continue
-        value_min = values.min()
-        value_max = values.max()
-        if (value_max - value_min).abs() < 1e-8:
-            normalized_values = (values > 0).float()
-        else:
-            normalized_values = (values - value_min) / (value_max - value_min + 1e-8)
-        normalized[batch_idx][valid] = normalized_values
-
+    normalized = masked_minmax_normalize(reliability, seq_mask, positive_constant_one=True)
+    zero_rows = reliability.masked_fill(~seq_mask, 0.0).max(dim=1, keepdim=True).values <= 0
+    normalized = torch.where(zero_rows, torch.zeros_like(normalized), normalized)
     return normalized.masked_fill(item_seq.eq(pad_id), 0.0)
 
 
@@ -192,26 +188,31 @@ def compute_adaptive_position_scores(importance, reliability, seq_mask, mode, ep
     return torch.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
 
 
-def select_adaptive_positions(position_scores, seq_mask, ratio, mode="sample", temperature=0.5, fallback="random"):
+def select_adaptive_positions(position_scores, seq_mask, ratio, mode="sample", temperature=0.5, fallback="random",
+                              return_mask=False):
     """PAKA: select non-padding positions by top-k or sampling without replacement."""
     selected_positions = []
     fallback_flags = []
+    selected_mask = torch.zeros_like(seq_mask, dtype=torch.bool)
     temperature = max(float(temperature), 1e-8)
 
     with torch.no_grad():
-        scores_cpu = position_scores.detach().cpu()
-        mask_cpu = seq_mask.detach().cpu()
-        for batch_idx in range(scores_cpu.size(0)):
-            valid_positions = torch.nonzero(mask_cpu[batch_idx], as_tuple=False).view(-1)
+        scores = position_scores.detach()
+        mask = seq_mask.detach()
+        for batch_idx in range(scores.size(0)):
+            valid_positions = torch.nonzero(mask[batch_idx], as_tuple=False).view(-1)
             valid_len = int(valid_positions.numel())
             if valid_len == 0 or ratio <= 0:
                 selected_positions.append([])
                 fallback_flags.append(0)
                 continue
 
-            select_num = int(torch.ceil(torch.tensor(float(ratio) * valid_len)).item())
+            raw_select_num = float(ratio) * valid_len
+            select_num = int(raw_select_num)
+            if raw_select_num > select_num:
+                select_num += 1
             select_num = max(1, min(select_num, valid_len))
-            valid_scores = scores_cpu[batch_idx][valid_positions]
+            valid_scores = scores[batch_idx][valid_positions]
             valid_scores = torch.nan_to_num(valid_scores, nan=0.0, posinf=0.0, neginf=0.0)
             positive_mask = valid_scores > 0
             use_fallback = bool((not torch.isfinite(valid_scores).all()) or valid_scores.max() <= 0)
@@ -241,8 +242,11 @@ def select_adaptive_positions(position_scores, seq_mask, ratio, mode="sample", t
                 else:
                     raise ValueError("position_select_mode should be sample or topk")
 
-            selected_positions.append([int(pos) for pos in chosen.tolist()])
+            selected_mask[batch_idx, chosen] = True
+            selected_positions.append([int(pos) for pos in chosen.detach().cpu().tolist()])
 
+    if return_mask:
+        return selected_positions, fallback_flags, selected_mask
     return selected_positions, fallback_flags
 
 
