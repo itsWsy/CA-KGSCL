@@ -37,12 +37,23 @@ if __name__ == '__main__':
                         help='number of substitute neighbors used as extra MP-VT positives')
     parser.add_argument('--mp_vt_tau', default=None, type=float,
                         help='MP-VT temperature; reuse tem2 when not specified')
+    parser.add_argument('--use_adaptive_position_aug', nargs='?', const=True, default=False, type=str2bool,
+                        help='whether to use position-level adaptive KG augmentation')
+    parser.add_argument('--position_select_mode', default='sample', type=str, choices=['sample', 'topk'])
+    parser.add_argument('--position_temperature', default=0.5, type=float)
+    parser.add_argument('--position_importance_sim', default='cosine', type=str, choices=['cosine', 'dot'])
+    parser.add_argument('--kg_reliability_agg', default='max', type=str, choices=['max', 'mean'])
+    parser.add_argument('--adaptive_position_warmup_epochs', default=5, type=int)
+    parser.add_argument('--adaptive_position_fallback', default='random', type=str, choices=['random', 'original'])
+    parser.add_argument('--adaptive_substitute_position', nargs='?', const=True, default=True, type=str2bool)
+    parser.add_argument('--adaptive_insert_position', nargs='?', const=True, default=True, type=str2bool)
     # Data
     parser.add_argument('--dataset', default='toys', type=str)
     parser.add_argument('--data_aug', action='store_false', help='data augmentation')
     parser.add_argument('--separator', default=' ', type=str, help='separator to split item sequence')
     # Training
     parser.add_argument('--epoch_num', default=100, type=int)
+    parser.add_argument('--seed', default=-1, type=int, help="random seed: -1 means don't set random seed")
     parser.add_argument('--train_batch', default=512, type=int)
     parser.add_argument('--learning_rate', default=1e-3, type=float)
     parser.add_argument('--l2', default=0., type=float, help='l2 normalization')  # 1e-6

@@ -108,6 +108,144 @@ def get_corr_score(src, dst, corr_score):
         return 0.
 
 
+def get_last_valid_indices(seq_mask):
+    """PAKA: return the last non-padding index for left- or right-padded sequences."""
+    batch_size, max_len = seq_mask.size()
+    position_ids = torch.arange(max_len, device=seq_mask.device).unsqueeze(0).expand(batch_size, max_len)
+    last_indices = position_ids.masked_fill(~seq_mask, -1).max(dim=1).values
+    return last_indices.clamp_min(0)
+
+
+def compute_position_importance(hidden_states, seq_mask, seq_lengths=None, similarity="cosine", eps=1e-8):
+    """PAKA: compute normalized position importance, hidden_states is [B, L, D]."""
+    batch_size = hidden_states.size(0)
+    if seq_lengths is not None:
+        last_indices = (seq_lengths.long() - 1).clamp_min(0)
+    else:
+        last_indices = get_last_valid_indices(seq_mask)
+    batch_index = torch.arange(batch_size, device=hidden_states.device)
+    user_repr = hidden_states[batch_index, last_indices]
+
+    if similarity == "cosine":
+        hidden_norm = F.normalize(hidden_states, p=2, dim=-1)
+        user_norm = F.normalize(user_repr, p=2, dim=-1)
+        raw_score = torch.sum(hidden_norm * user_norm.unsqueeze(1), dim=-1)
+    elif similarity == "dot":
+        raw_score = torch.sum(hidden_states * user_repr.unsqueeze(1), dim=-1)
+    else:
+        raise ValueError("position_importance_sim should be cosine or dot")
+
+    raw_score = raw_score.masked_fill(~seq_mask, 0.0)
+    importance = torch.zeros_like(raw_score)
+
+    for batch_idx in range(batch_size):
+        valid = seq_mask[batch_idx]
+        if valid.sum() == 0:
+            continue
+        values = raw_score[batch_idx][valid]
+        value_min = values.min()
+        value_max = values.max()
+        if (value_max - value_min).abs() < eps:
+            normalized = torch.zeros_like(values)
+            normalized[-1] = 1.0
+        else:
+            normalized = (values - value_min) / (value_max - value_min + eps)
+        importance[batch_idx][valid] = normalized
+
+    return importance.masked_fill(~seq_mask, 0.0), user_repr
+
+
+def compute_kg_reliability_for_sequence(item_seq, seq_mask, reliability_table, agg="max", pad_id=0):
+    """PAKA: index precomputed item-level reliability and normalize per sequence."""
+    reliability = reliability_table[item_seq.clamp_min(0)].float()
+    reliability = reliability.masked_fill(~seq_mask, 0.0)
+    normalized = torch.zeros_like(reliability)
+
+    for batch_idx in range(item_seq.size(0)):
+        valid = seq_mask[batch_idx]
+        if valid.sum() == 0:
+            continue
+        values = reliability[batch_idx][valid]
+        if values.max() <= 0:
+            continue
+        value_min = values.min()
+        value_max = values.max()
+        if (value_max - value_min).abs() < 1e-8:
+            normalized_values = (values > 0).float()
+        else:
+            normalized_values = (values - value_min) / (value_max - value_min + 1e-8)
+        normalized[batch_idx][valid] = normalized_values
+
+    return normalized.masked_fill(item_seq.eq(pad_id), 0.0)
+
+
+def compute_adaptive_position_scores(importance, reliability, seq_mask, mode, eps=1e-8):
+    """PAKA: score substitute as K*(1-I), insert as K*I."""
+    if mode == "substitute":
+        scores = reliability * (1.0 - importance)
+    elif mode == "insert":
+        scores = reliability * importance
+    else:
+        raise ValueError("mode should be substitute or insert")
+    scores = torch.clamp(scores, min=0.0)
+    scores = scores.masked_fill(~seq_mask, 0.0)
+    return torch.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def select_adaptive_positions(position_scores, seq_mask, ratio, mode="sample", temperature=0.5, fallback="random"):
+    """PAKA: select non-padding positions by top-k or sampling without replacement."""
+    selected_positions = []
+    fallback_flags = []
+    temperature = max(float(temperature), 1e-8)
+
+    with torch.no_grad():
+        scores_cpu = position_scores.detach().cpu()
+        mask_cpu = seq_mask.detach().cpu()
+        for batch_idx in range(scores_cpu.size(0)):
+            valid_positions = torch.nonzero(mask_cpu[batch_idx], as_tuple=False).view(-1)
+            valid_len = int(valid_positions.numel())
+            if valid_len == 0 or ratio <= 0:
+                selected_positions.append([])
+                fallback_flags.append(0)
+                continue
+
+            select_num = int(torch.ceil(torch.tensor(float(ratio) * valid_len)).item())
+            select_num = max(1, min(select_num, valid_len))
+            valid_scores = scores_cpu[batch_idx][valid_positions]
+            valid_scores = torch.nan_to_num(valid_scores, nan=0.0, posinf=0.0, neginf=0.0)
+            positive_mask = valid_scores > 0
+            use_fallback = bool((not torch.isfinite(valid_scores).all()) or valid_scores.max() <= 0)
+
+            if use_fallback:
+                perm = torch.randperm(valid_len)[:select_num]
+                chosen = valid_positions[perm]
+                fallback_flags.append(1)
+            else:
+                fallback_flags.append(0)
+                if int(positive_mask.sum().item()) < select_num:
+                    positive_positions = valid_positions[positive_mask]
+                    zero_positions = valid_positions[~positive_mask]
+                    fill_num = select_num - int(positive_positions.numel())
+                    if fill_num > 0 and zero_positions.numel() > 0:
+                        fill = zero_positions[torch.randperm(zero_positions.numel())[:fill_num]]
+                        chosen = torch.cat([positive_positions, fill], dim=0)
+                    else:
+                        chosen = positive_positions
+                elif mode == "topk":
+                    _, top_indices = torch.topk(valid_scores, k=select_num)
+                    chosen = valid_positions[top_indices]
+                elif mode == "sample":
+                    prob = torch.softmax(valid_scores / temperature, dim=0)
+                    sample_indices = torch.multinomial(prob, num_samples=select_num, replacement=False)
+                    chosen = valid_positions[sample_indices]
+                else:
+                    raise ValueError("position_select_mode should be sample or topk")
+
+            selected_positions.append([int(pos) for pos in chosen.tolist()])
+
+    return selected_positions, fallback_flags
+
+
 def _get_aligned_substitute_scores(item_id, corr_score):
     if not isinstance(corr_score, dict):
         return None

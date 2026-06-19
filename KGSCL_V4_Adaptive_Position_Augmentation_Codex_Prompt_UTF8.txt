@@ -1,0 +1,1086 @@
+﻿KGSCL V4：位置级自适应知识增强模块 Codex 实现提示词
+
+文件编码说明：
+本文件采用 UTF-8 with BOM 编码，适合在 Windows 记事本、VS Code、PyCharm 和 Codex 环境中直接读取，中文不应出现乱码。
+
+你现在需要在“最初版本的 KGSCL 代码库”上新增一个独立模块：
+
+V4：Position-level Adaptive Knowledge Augmentation
+中文名称：位置级自适应知识增强
+建议简称：PAKA（Position-Adaptive Knowledge Augmentation）
+
+本次任务只新增“增强位置自适应选择”模块。
+不要实现多正样本 View-Target CL。
+不要实现假负样本过滤。
+不要实现知识软标签。
+不要实现置信度邻居重排序。
+不要引入 GNN、扩散模型、多意图、超图、傅里叶变换或其他额外方法。
+
+==================================================
+一、任务目标
+==================================================
+
+原始 KGSCL 在执行 KG-Substitute 和 KG-Insert 时，通常按照固定增强比例，随机选择序列位置：
+
+k_sub = ceil(substitute_ratio * valid_seq_len)
+k_ins = ceil(insert_ratio * valid_seq_len)
+
+随机位置选择可能带来两个问题：
+
+1. KG-Substitute 可能替换用户当前最关键的兴趣物品，导致增强序列偏离原始语义；
+2. KG-Insert 没有优先在核心兴趣物品后插入互补物品，知识增强的有效性不足。
+
+现在需要将随机位置选择改为“位置级自适应选择”：
+
+1. 先编码原始序列，获得每个位置的隐藏表示；
+2. 根据每个位置对当前用户兴趣的重要性，计算位置重要性分数；
+3. 根据该位置物品的知识邻居及共现相关性，计算知识可靠性分数；
+4. KG-Substitute 和 KG-Insert 使用不同的位置评分规则；
+5. 根据位置评分进行无放回采样或 Top-K 选择；
+6. 邻居物品的具体采样方式保持原始 KGSCL 不变；
+7. 原始推荐损失、View-View CL、View-Target CL 和 target substitution 全部保持不变。
+
+核心设计：
+
+位置重要性：
+I_i = sim(h_i, h_u)
+
+其中：
+- h_i 是序列第 i 个有效位置的隐藏表示；
+- h_u 是原始序列的最终用户表示，即最后一个有效位置的隐藏表示；
+- 默认使用 cosine similarity；
+- I_i 需要归一化到 [0, 1]。
+
+知识可靠性：
+K_i = max_{j in N(v_i)} Cor(v_i, v_j)
+
+其中：
+- 对 KG-Substitute，N(v_i) 使用 substitution relation set；
+- 对 KG-Insert，N(v_i) 使用 complementary relation set；
+- Cor(v_i, v_j) 使用原始 KGSCL 已有的 co-occurrence/correlation score；
+- 默认使用最大邻居相关性 max；
+- K_i 需要归一化到 [0, 1]。
+
+KG-Substitute 位置分数：
+A_sub(i) = K_sub(i) * (1 - I_i)
+
+含义：
+知识邻居可靠、但不是当前最核心兴趣的位置，更适合被替换。
+
+KG-Insert 位置分数：
+A_ins(i) = K_ins(i) * I_i
+
+含义：
+知识邻居可靠、且属于当前核心兴趣的位置，更适合在其后插入互补物品。
+
+==================================================
+二、先检查当前仓库结构
+==================================================
+
+请先完整阅读当前 KGSCL 项目，不要直接假设文件名。
+
+在仓库中搜索以下关键词：
+
+KGSCL
+KGSubstitute
+KGInsert
+KG-Substitute
+KG-Insert
+substitute_ratio
+insert_ratio
+augmentation
+augment
+relation_set
+substitute_set
+complementary_set
+co-occurrence
+correlation
+item_repeat
+SeqEnc
+sequence_output
+item_embedding
+forward
+calculate_loss
+train
+loss_v2v
+loss_v2t
+
+需要定位并确认：
+
+1. KGSCL 模型类所在文件；
+2. KG-Substitute 的实现位置；
+3. KG-Insert 的实现位置；
+4. 当前随机选择增强位置的代码；
+5. substitution relation set 的数据结构；
+6. complementary relation set 的数据结构；
+7. co-occurrence/correlation score 的数据结构；
+8. 原始序列编码函数；
+9. 如何获得每个位置的 hidden states；
+10. 如何获得最后一个有效位置的用户表示；
+11. 训练阶段增强视图的生成位置；
+12. 原始 KGSCL 的总损失计算位置。
+
+修改前，请先总结当前调用链，例如：
+
+train batch
+-> generate augmented sequences
+-> model forward
+-> original representation and augmented representations
+-> recommendation loss
+-> V2V loss
+-> V2T loss
+
+然后再进行最小侵入式修改。
+
+==================================================
+三、总体改造原则
+==================================================
+
+原始 KGSCL 通常先生成增强序列，再统一编码。
+
+但位置自适应增强需要原始序列的 hidden states，因此训练流程需要调整为：
+
+步骤 1：
+先编码原始序列，得到：
+- all_hidden：每个位置的隐藏表示，形状 [B, L, D]；
+- user_repr：最后一个有效位置的表示，形状 [B, D]。
+
+步骤 2：
+使用 all_hidden 和 user_repr 计算位置重要性。
+
+步骤 3：
+结合 relation set 和 correlation score，分别计算：
+- substitute position scores；
+- insert position scores。
+
+步骤 4：
+根据位置分数选择增强位置。
+
+步骤 5：
+保持原始 KGSCL 的邻居候选选择和候选物品采样方式不变，生成：
+- substitute augmented view；
+- insert augmented view。
+
+步骤 6：
+编码增强视图，计算原始 KGSCL 的：
+- recommendation loss；
+- View-View CL；
+- View-Target CL。
+
+重要要求：
+
+1. 原始序列只编码一次；
+2. 第一次编码得到的 original hidden states 要复用于推荐任务和 V2V，不要重复编码原始序列；
+3. 用于位置选择的 hidden states 和 user representation 必须 detach；
+4. 位置采样是不可导操作，不需要让梯度经过位置选择过程；
+5. 不允许使用真实 target item 计算位置分数，避免标签泄露；
+6. 不允许使用验证集或测试集信息；
+7. 推理和评估阶段不需要执行数据增强，保持原始 KGSCL 评估逻辑不变。
+
+==================================================
+四、新增配置参数
+==================================================
+
+请在当前项目的参数配置文件、YAML、JSON、argparse 或 config 类中，按照现有风格新增：
+
+1. use_adaptive_position_aug
+类型：bool
+默认值：False
+作用：是否启用位置级自适应知识增强。
+
+2. position_select_mode
+类型：str
+可选值：sample、topk
+默认值：sample
+作用：
+- sample：根据 softmax 概率无放回采样；
+- topk：直接选择分数最高的 k 个位置。
+
+3. position_temperature
+类型：float
+默认值：0.5
+作用：控制位置采样分布的温度。
+
+4. position_importance_sim
+类型：str
+可选值：cosine、dot
+默认值：cosine
+
+5. kg_reliability_agg
+类型：str
+可选值：max、mean
+默认值：max
+
+6. adaptive_position_warmup_epochs
+类型：int
+默认值：5
+作用：
+训练前若干 epoch 继续使用原始随机位置选择；从该 epoch 之后启用自适应位置选择，避免训练早期隐藏表示尚不稳定。
+
+7. adaptive_position_fallback
+类型：str
+可选值：random、original
+默认值：random
+作用：
+当一个样本所有位置分数均为 0 或没有可用知识邻居时：
+- random：退化为原始随机位置选择；
+- original：完全调用原始增强位置选择逻辑。
+
+如果项目不使用命令行参数，请以当前配置系统的原有格式实现，不要引入新的配置框架。
+
+必须保证：
+use_adaptive_position_aug=False 时，原始 KGSCL 行为完全不变。
+
+==================================================
+五、实现位置重要性计算
+==================================================
+
+新增函数，名称可根据项目风格调整，建议：
+
+compute_position_importance(
+    hidden_states,
+    seq_mask,
+    seq_lengths=None,
+    similarity="cosine",
+    eps=1e-8
+)
+
+输入：
+
+- hidden_states：
+  Tensor，形状 [B, L, D]；
+  原始序列每个位置的隐藏表示。
+
+- seq_mask：
+  Bool Tensor，形状 [B, L]；
+  有效 item 位置为 True，padding 为 False。
+
+- seq_lengths：
+  可选，形状 [B]；
+  如果项目已经有序列长度，优先复用。
+
+输出：
+
+- importance：
+  Tensor，形状 [B, L]；
+  每个有效位置的重要性归一化到 [0, 1]；
+  padding 位置必须为 0。
+
+计算步骤：
+
+1. 获取每个样本最后一个有效位置的 hidden state，作为 user_repr；
+2. 计算每个位置与 user_repr 的相似度；
+3. cosine 模式：
+   对 hidden_states 和 user_repr 做 L2 normalize，再点积；
+4. dot 模式：
+   直接点积；
+5. 对每个样本仅在有效位置上做 min-max normalization：
+
+I_i = (score_i - min_valid) / (max_valid - min_valid + eps)
+
+6. padding 位置设置为 0；
+7. 如果一个样本只有一个有效位置，或者所有有效位置相同：
+   - 最后一个有效位置的重要性设置为 1；
+   - 其他有效位置可设置为 0 或保持稳定值；
+   - 不允许产生 NaN。
+
+参考逻辑：
+
+def compute_position_importance(hidden_states, seq_mask, similarity="cosine", eps=1e-8):
+    B, L, D = hidden_states.shape
+    lengths = seq_mask.long().sum(dim=1)
+    last_index = (lengths - 1).clamp_min(0)
+
+    batch_index = torch.arange(B, device=hidden_states.device)
+    user_repr = hidden_states[batch_index, last_index]
+
+    if similarity == "cosine":
+        hidden_norm = F.normalize(hidden_states, p=2, dim=-1)
+        user_norm = F.normalize(user_repr, p=2, dim=-1)
+        raw_score = torch.sum(hidden_norm * user_norm.unsqueeze(1), dim=-1)
+    else:
+        raw_score = torch.sum(hidden_states * user_repr.unsqueeze(1), dim=-1)
+
+    raw_score = raw_score.masked_fill(~seq_mask, 0.0)
+
+    importance = torch.zeros_like(raw_score)
+
+    for b in range(B):
+        valid = seq_mask[b]
+        if valid.sum() == 0:
+            continue
+
+        values = raw_score[b][valid]
+        v_min = values.min()
+        v_max = values.max()
+
+        if (v_max - v_min).abs() < eps:
+            normalized = torch.zeros_like(values)
+            normalized[-1] = 1.0
+        else:
+            normalized = (values - v_min) / (v_max - v_min + eps)
+
+        importance[b][valid] = normalized
+
+    return importance, user_repr
+
+请根据当前项目 padding 方向进行适配。
+
+如果项目使用左侧 padding，不能直接假设最后一个有效位置是 lengths - 1。
+必须根据 seq_mask 查找真实最后一个非 padding 下标。
+
+建议实现一个通用函数：
+
+get_last_valid_indices(seq_mask)
+
+兼容左 padding 和右 padding：
+
+position_ids = torch.arange(L, device=seq_mask.device).unsqueeze(0).expand(B, L)
+last_indices = position_ids.masked_fill(~seq_mask, -1).max(dim=1).values
+last_indices = last_indices.clamp_min(0)
+
+==================================================
+六、实现知识可靠性计算
+==================================================
+
+新增函数，建议：
+
+compute_kg_reliability_for_sequence(
+    item_seq,
+    seq_mask,
+    relation_set,
+    correlation_score,
+    agg="max",
+    pad_id=0
+)
+
+输入：
+
+- item_seq：
+  LongTensor，形状 [B, L]。
+
+- seq_mask：
+  Bool Tensor，形状 [B, L]。
+
+- relation_set：
+  对应关系的邻居集合。
+  Substitute 使用 substitution relation set。
+  Insert 使用 complementary relation set。
+
+- correlation_score：
+  原始 KGSCL 已有的共现或相关性分数。
+
+- agg：
+  max 或 mean，默认 max。
+
+输出：
+
+- reliability：
+  Float Tensor，形状 [B, L]；
+  每个有效位置的知识可靠性归一化到 [0, 1]；
+  padding 位置为 0；
+  没有关系邻居的位置为 0。
+
+需要实现或复用：
+
+get_relation_neighbors(item_id, relation_set)
+
+get_correlation_score(src_item, dst_item, correlation_score)
+
+要求兼容当前仓库中实际的数据结构，例如：
+
+- dict[int, list[int]]
+- dict[str, list]
+- list[list[int]]
+- numpy array
+- torch tensor
+- scipy sparse matrix
+- dict[(src, dst), score]
+- dict[src][dst]
+- 预计算概率数组
+
+知识可靠性计算：
+
+对于 item v_i：
+
+neighbors = N(v_i)
+
+如果 neighbors 为空：
+K_i = 0
+
+否则：
+max 模式：
+K_i = max(Cor(v_i, v_j))
+
+mean 模式：
+K_i = mean(Cor(v_i, v_j))
+
+注意：
+
+1. 使用对应关系集合；
+2. Substitute 不得使用 complementary neighbors；
+3. Insert 不得使用 substitution neighbors；
+4. 过滤 padding item；
+5. 过滤非法 item id；
+6. 如果 relation set 将原 item 自身加入邻居集合，计算可靠性时建议排除自身；
+7. 如果 correlation score 缺失：
+   - 优先复用原始 KGSCL 的默认平滑值；
+   - 不要人为创造过大的分数；
+8. 仅在每个样本的有效位置上做 min-max normalization；
+9. 如果所有有效位置 reliability 都为 0，则保持全 0；
+10. 不允许产生 NaN。
+
+性能要求：
+
+不要在每个 epoch 中重复扫描全图。
+
+优先实现预计算 item-level reliability：
+
+sub_reliability_table[item_id]
+ins_reliability_table[item_id]
+
+在数据加载完成或模型初始化阶段计算一次。
+
+训练时通过 item_seq 索引：
+
+sub_reliability = sub_reliability_table[item_seq]
+ins_reliability = ins_reliability_table[item_seq]
+
+如果当前 relation/correlation 数据结构不方便预计算，可以先实现正确版本，再尽量缓存结果。
+
+==================================================
+七、实现 Substitute 和 Insert 的位置评分
+==================================================
+
+新增函数，建议：
+
+compute_adaptive_position_scores(
+    importance,
+    reliability,
+    seq_mask,
+    mode,
+    eps=1e-8
+)
+
+其中：
+
+mode="substitute"：
+score = reliability * (1.0 - importance)
+
+mode="insert"：
+score = reliability * importance
+
+处理要求：
+
+1. padding 位置分数为 0；
+2. reliability 为 0 的位置分数为 0；
+3. 分数不能为负；
+4. 对每个样本可选地再做一次归一化；
+5. 不允许产生 NaN；
+6. 不使用 target item；
+7. importance 和 reliability 均使用 detach 后的值。
+
+建议：
+
+sub_score = sub_reliability * (1.0 - importance)
+ins_score = ins_reliability * importance
+
+sub_score = sub_score.masked_fill(~seq_mask, 0.0)
+ins_score = ins_score.masked_fill(~seq_mask, 0.0)
+
+==================================================
+八、实现自适应位置选择
+==================================================
+
+新增函数，建议：
+
+select_adaptive_positions(
+    position_scores,
+    seq_mask,
+    ratio,
+    mode="sample",
+    temperature=0.5,
+    fallback="random",
+    original_selector=None
+)
+
+输入：
+
+- position_scores：
+  Tensor，[B, L]。
+
+- seq_mask：
+  Bool Tensor，[B, L]。
+
+- ratio：
+  substitute_ratio 或 insert_ratio。
+
+- mode：
+  sample 或 topk。
+
+- temperature：
+  softmax 温度。
+
+- fallback：
+  random 或 original。
+
+输出：
+
+- selected_positions：
+  List[List[int]]
+  每个样本选择的原始序列位置下标。
+
+每个样本的选择数量：
+
+n = 有效序列长度
+k = ceil(ratio * n)
+
+要求：
+
+1. k 至少为 1，除非 ratio=0；
+2. k 不能超过有效位置数量；
+3. 不能选择 padding 位置；
+4. 不能重复选择同一位置；
+5. sample 模式使用无放回采样：
+
+prob = softmax(valid_scores / temperature)
+torch.multinomial(prob, num_samples=k, replacement=False)
+
+6. topk 模式直接选 valid_scores 最大的 k 个；
+7. 如果所有 valid_scores <= 0，或分数包含异常：
+   - fallback=random 时，从有效位置均匀随机选 k 个；
+   - fallback=original 时，调用原始 KGSCL 的位置选择逻辑；
+8. 如果非零分数位置数量少于 k：
+   - 优先选择所有非零位置；
+   - 剩余位置从有效但零分的位置中随机补齐；
+   - 或按照原始逻辑补齐；
+9. temperature 必须大于 0；
+10. 位置选择过程放在 torch.no_grad() 中；
+11. selected_positions 应使用 Python int，方便接入原始 augmentation 代码。
+
+特别注意：
+
+不要因为分数为 0 就完全不增强。
+需要保持增强数量和原始 KGSCL 一致，确保公平比较。
+
+==================================================
+九、接入 KG-Substitute
+==================================================
+
+找到原始 KG-Substitute 中随机选择位置的逻辑，例如：
+
+selected_indices = random.sample(valid_indices, k)
+
+当满足以下条件时：
+
+use_adaptive_position_aug=True
+且 current_epoch >= adaptive_position_warmup_epochs
+
+替换为：
+
+selected_indices = adaptive_sub_positions[b]
+
+其中 adaptive_sub_positions 来自：
+
+importance = compute_position_importance(...)
+sub_reliability = ...
+sub_scores = sub_reliability * (1 - importance)
+adaptive_sub_positions = select_adaptive_positions(...)
+
+重要要求：
+
+1. 只替换“位置选择逻辑”；
+2. 替代候选物品仍然使用原始 KGSCL 的 substitution neighbor sampling；
+3. 原始 co-occurrence-based candidate sampling 保持不变；
+4. Item-Repeat fallback 保持不变；
+5. substitute_ratio 保持原值；
+6. 不能改替换后的序列格式；
+7. 不能改目标 item；
+8. 不能改原始数据预处理。
+
+==================================================
+十、接入 KG-Insert
+==================================================
+
+找到原始 KG-Insert 中随机选择位置的逻辑。
+
+当满足以下条件时：
+
+use_adaptive_position_aug=True
+且 current_epoch >= adaptive_position_warmup_epochs
+
+替换为：
+
+selected_indices = adaptive_ins_positions[b]
+
+其中：
+
+ins_scores = ins_reliability * importance
+
+重要要求：
+
+1. 只替换位置选择逻辑；
+2. 插入候选物品仍然使用原始 KGSCL 的 complementary neighbor sampling；
+3. 原始 co-occurrence-based candidate sampling 保持不变；
+4. Item-Repeat fallback 保持不变；
+5. insert_ratio 保持原值；
+6. 插入多个物品时必须正确处理索引偏移。
+
+建议：
+
+如果原始代码是在原序列上原地 insert：
+- 将 selected_indices 按从大到小排序后执行插入，避免前面插入导致后续位置偏移；
+
+或者：
+- 遍历原始序列重新构造新序列，在选中位置后附加插入物品。
+
+7. 继续使用原始 KGSCL 的 max_len 截断和 padding 逻辑；
+8. 不允许插入后破坏 target item 或样本标签；
+9. 不要修改 evaluation 序列。
+
+==================================================
+十一、训练流程重构要求
+==================================================
+
+由于位置自适应选择依赖原始序列 hidden states，请谨慎重构训练流程。
+
+推荐结构：
+
+def calculate_loss(batch, current_epoch=None):
+
+    item_seq = ...
+    target_item = ...
+    seq_mask = item_seq.ne(pad_id)
+
+    # 1. 编码原始序列，只编码一次
+    all_hidden, user_repr = encode_original_sequence(
+        item_seq,
+        return_all_hidden=True
+    )
+
+    # 2. 推荐损失仍使用原始 user_repr
+    loss_rec = original_recommendation_loss(user_repr, target_item)
+
+    # 3. 选择增强位置
+    if use_adaptive_position_aug and current_epoch >= warmup:
+        with torch.no_grad():
+            importance = compute_position_importance(
+                all_hidden.detach(),
+                seq_mask
+            )
+
+            sub_reliability = sub_reliability_table[item_seq]
+            ins_reliability = ins_reliability_table[item_seq]
+
+            sub_scores = sub_reliability * (1.0 - importance)
+            ins_scores = ins_reliability * importance
+
+            sub_positions = select_adaptive_positions(
+                sub_scores,
+                seq_mask,
+                ratio=substitute_ratio,
+                mode=position_select_mode,
+                temperature=position_temperature
+            )
+
+            ins_positions = select_adaptive_positions(
+                ins_scores,
+                seq_mask,
+                ratio=insert_ratio,
+                mode=position_select_mode,
+                temperature=position_temperature
+            )
+    else:
+        sub_positions = original_random_substitute_positions(...)
+        ins_positions = original_random_insert_positions(...)
+
+    # 4. 使用原始候选物品采样方法生成增强视图
+    view_sub = kg_substitute(
+        item_seq,
+        selected_positions=sub_positions,
+        ...
+    )
+
+    view_ins = kg_insert(
+        item_seq,
+        selected_positions=ins_positions,
+        ...
+    )
+
+    # 5. 编码增强视图
+    sub_repr = encode_sequence(view_sub)
+    ins_repr = encode_sequence(view_ins)
+
+    # 6. 原始 KGSCL 损失全部保持不变
+    loss_v2v = original_v2v_loss(...)
+    loss_v2t = original_v2t_loss(...)
+
+    total_loss = (
+        loss_rec
+        + lamda1 * loss_v2v
+        + lamda2 * loss_v2t
+    )
+
+    return total_loss
+
+请根据当前 KGSCL 实际使用的两个视图组合进行适配。
+
+如果原始代码每个 batch 随机从 KGS 和 KGI 中选择增强器，而不是固定生成一个 substitute view 和一个 insert view：
+1. 仍然保持原始增强器采样策略；
+2. 只有当选中 KGS 时，使用 substitute position scores；
+3. 只有当选中 KGI 时，使用 insert position scores；
+4. 不改变两个视图的原始组合概率。
+
+==================================================
+十二、避免额外前向计算
+==================================================
+
+本模块不应该把原始序列编码两次。
+
+请检查并保证：
+
+1. 原始 sequence representation 直接来自第一次编码；
+2. recommendation loss 使用第一次编码结果；
+3. V2V 中的 original representation 使用第一次编码结果；
+4. 只对新增的增强视图执行原本需要的 forward；
+5. 不因为自适应位置选择额外再编码一次原始序列。
+
+如果当前模型的 forward 只返回最后一个 hidden state，请进行最小修改：
+
+forward(item_seq, return_all_hidden=False)
+
+当 return_all_hidden=True 时返回：
+
+all_hidden, final_repr
+
+当 return_all_hidden=False 时保持原来的返回格式和行为，避免破坏其他代码。
+
+==================================================
+十三、Warm-up 机制
+==================================================
+
+训练早期的 hidden states 尚未稳定，因此默认：
+
+adaptive_position_warmup_epochs = 5
+
+当 epoch < warmup_epochs：
+使用原始随机位置选择。
+
+当 epoch >= warmup_epochs：
+启用位置级自适应选择。
+
+要求：
+
+1. current_epoch 必须从 trainer 传递到 augmentation 或 loss 计算函数；
+2. 不要使用全局变量；
+3. 如果当前 trainer 不方便传 epoch，可在 model 中提供 set_epoch(epoch)；
+4. 日志中明确打印当前 epoch 使用的是 random 还是 adaptive；
+5. use_adaptive_position_aug=False 时完全忽略 warm-up。
+
+==================================================
+十四、日志与诊断信息
+==================================================
+
+训练开始时打印：
+
+use_adaptive_position_aug
+position_select_mode
+position_temperature
+position_importance_sim
+kg_reliability_agg
+adaptive_position_warmup_epochs
+adaptive_position_fallback
+
+每个 epoch 最多打印一次以下统计，避免日志过长：
+
+1. position_mode=random 或 adaptive；
+2. avg_sub_selected_importance；
+3. avg_sub_selected_reliability；
+4. avg_sub_selected_score；
+5. avg_ins_selected_importance；
+6. avg_ins_selected_reliability；
+7. avg_ins_selected_score；
+8. sub_fallback_ratio；
+9. ins_fallback_ratio；
+10. avg_sub_position_from_end；
+11. avg_ins_position_from_end。
+
+预期现象：
+
+- Substitute 选择位置的重要性平均值应低于随机版本；
+- Insert 选择位置的重要性平均值应高于随机版本；
+- 两者知识可靠性应高于随机选择；
+- fallback ratio 不应长期接近 1。
+
+另外，建议在第一个启用 adaptive 的 epoch 中，随机打印不超过 3 个样本：
+
+original valid positions
+importance scores
+sub reliability
+ins reliability
+sub scores
+ins scores
+selected substitute positions
+selected insert positions
+
+只用于调试，默认可关闭。
+
+==================================================
+十五、必须完成的正确性检查
+==================================================
+
+1. 静态检查
+对所有修改文件执行：
+
+python -m py_compile <modified_file.py>
+
+2. 原始模式回归测试
+
+use_adaptive_position_aug=False
+
+要求：
+- 原始 KGSCL 可正常训练；
+- loss 计算不变；
+- 参数数量基本不变；
+- 相同 seed 下结果与修改前基本一致；
+- 不额外增加原始序列 forward 次数。
+
+3. Warm-up 测试
+
+use_adaptive_position_aug=True
+adaptive_position_warmup_epochs=5
+
+要求：
+- epoch 0 到 4 使用 random；
+- epoch 5 开始使用 adaptive。
+
+4. Padding 测试
+
+构造同时包含：
+- 左 padding；
+- 右 padding；
+- 长度为 1；
+- 长度大于 1；
+- 全 padding 异常样本。
+
+确保：
+- 不选择 padding；
+- 不发生索引越界；
+- 不产生 NaN。
+
+5. Substitute 测试
+
+确保：
+- selected position 数量符合 ceil(substitute_ratio * valid_len)；
+- 优先选择高 K、低 I 的位置；
+- 候选替代 item 仍由原始 KGSCL 逻辑产生。
+
+6. Insert 测试
+
+确保：
+- selected position 数量符合 ceil(insert_ratio * valid_len)；
+- 优先选择高 K、高 I 的位置；
+- 多次插入不发生位置偏移错误；
+- 输出长度和截断逻辑正确。
+
+7. 退化测试
+
+当所有 reliability 为 0：
+- 自动回退到原始随机位置选择；
+- 不允许训练中断。
+
+8. 反向传播测试
+
+虽然位置选择使用 detach 和 no_grad：
+- loss_rec、loss_v2v、loss_v2t 仍能正常 backward；
+- Transformer 和 item embedding 仍能获得梯度；
+- 不出现 inplace autograd error。
+
+9. 性能检查
+
+记录单 epoch 训练时间。
+本模块不应引入全图级别的重复计算。
+知识可靠性表应尽可能预计算并缓存。
+
+==================================================
+十六、推荐实验命令
+==================================================
+
+请根据当前项目实际命令格式给出可直接运行的命令。
+
+基线：
+
+use_adaptive_position_aug=False
+seed=42
+
+自适应位置增强，推荐第一组：
+
+use_adaptive_position_aug=True
+position_select_mode=sample
+position_temperature=0.5
+position_importance_sim=cosine
+kg_reliability_agg=max
+adaptive_position_warmup_epochs=5
+adaptive_position_fallback=random
+seed=42
+
+第二组：
+
+use_adaptive_position_aug=True
+position_select_mode=sample
+position_temperature=0.2
+position_importance_sim=cosine
+kg_reliability_agg=max
+adaptive_position_warmup_epochs=5
+seed=42
+
+第三组：
+
+use_adaptive_position_aug=True
+position_select_mode=topk
+position_temperature=0.5
+position_importance_sim=cosine
+kg_reliability_agg=max
+adaptive_position_warmup_epochs=5
+seed=42
+
+开发阶段只使用相同 seed 比较。
+
+至少比较：
+
+1. Original KGSCL；
+2. KGSCL + adaptive substitute positions only；
+3. KGSCL + adaptive insert positions only；
+4. KGSCL + adaptive substitute and insert positions。
+
+为了支持消融，可以额外加入两个布尔开关：
+
+adaptive_substitute_position
+默认 True
+
+adaptive_insert_position
+默认 True
+
+当 use_adaptive_position_aug=True 时：
+- 可单独关闭 substitute 自适应；
+- 可单独关闭 insert 自适应。
+
+==================================================
+十七、消融与输出统计
+==================================================
+
+需要支持以下实验：
+
+A. 原始 KGSCL
+Adaptive Sub = False
+Adaptive Ins = False
+
+B. 仅自适应 Substitute
+Adaptive Sub = True
+Adaptive Ins = False
+
+C. 仅自适应 Insert
+Adaptive Sub = False
+Adaptive Ins = True
+
+D. 完整模块
+Adaptive Sub = True
+Adaptive Ins = True
+
+建议记录：
+
+HR@5
+HR@10
+NDCG@5
+NDCG@10
+best epoch
+training time per epoch
+fallback ratio
+
+不要修改验证指标和 early stopping 逻辑。
+
+==================================================
+十八、代码风格与限制
+==================================================
+
+1. 只做与位置级自适应增强相关的修改；
+2. 不重构无关代码；
+3. 不改数据集划分；
+4. 不改 full ranking；
+5. 不改评价指标；
+6. 不改负样本设置；
+7. 不改原始 KG 邻居候选采样；
+8. 不改原始 View-View CL；
+9. 不改原始 View-Target CL；
+10. 不改 target substitution；
+11. 不新增可学习门控网络；
+12. 不新增额外模型参数，除非当前代码结构必须；
+13. 不使用真实 target 决定增强位置；
+14. 不使用测试信息；
+15. 不引入新大型依赖；
+16. 不删除原始随机增强位置代码；
+17. use_adaptive_position_aug=False 时必须完整保留原始行为；
+18. 所有新增函数写清楚中文或英文 docstring；
+19. 对关键 tensor 标注 shape；
+20. 对左 padding、右 padding和 item id 范围做兼容处理。
+
+==================================================
+十九、最终交付内容
+==================================================
+
+代码修改完成后，请输出：
+
+1. 当前 KGSCL 原始增强位置选择流程；
+2. 修改后的训练调用链；
+3. 修改了哪些文件；
+4. 新增了哪些配置参数；
+5. 新增了哪些函数；
+6. 原始序列是否只编码一次；
+7. 如何获得 last valid hidden state；
+8. 如何处理左 padding 和右 padding；
+9. substitution reliability 使用了哪个关系集合；
+10. insertion reliability 使用了哪个关系集合；
+11. correlation score 的实际数据结构；
+12. 如何处理无知识邻居位置；
+13. 如何处理全部位置分数为 0；
+14. 如何处理插入导致的索引偏移；
+15. use_adaptive_position_aug=False 是否保持原始 KGSCL；
+16. 给出基线和三个自适应实验的完整运行命令；
+17. 给出 py_compile 和最小 batch 测试结果；
+18. 说明是否增加了额外 forward 和额外训练时间。
+
+==================================================
+二十、任务边界
+==================================================
+
+本次只实现：
+
+位置重要性计算
++
+关系对应的知识可靠性计算
++
+Substitute/Insert 差异化位置评分
++
+无放回自适应位置选择
++
+Warm-up 与 fallback
++
+接入原始 KGSCL 增强流程
+
+本次不要实现：
+
+Multi-Positive View-Target CL
+Weighted MP-VT
+Knowledge-aware False Negative Filtering
+Knowledge Soft Target
+KAST
+Confidence-aware Neighbor Sampling
+多跳知识图
+GNN
+扩散模型
+多意图模块
+超图
+傅里叶变换
+可学习增强门控
+
+请先理解当前仓库，再做最小侵入式修改，不要根据本提示词中的示例变量名强行覆盖项目原有命名。
