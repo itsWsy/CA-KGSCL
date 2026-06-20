@@ -1,0 +1,399 @@
+2026-06-19 17:30:20 INFO     log save at : log/home/KGSCL_5.log
+2026-06-19 17:30:20 INFO     model save at: save\KGSCL-home-2026-06-19_17-30-20.pth
+2026-06-19 17:30:22 INFO     Built reliability tables once: shape=torch.Size([28239]), time=0.4829s
+2026-06-19 17:30:22 INFO     use_mp_vt = False
+2026-06-19 17:30:22 INFO     mp_vt_top_m = 3
+2026-06-19 17:30:22 INFO     mp_vt_tau = 1.0
+2026-06-19 17:30:22 INFO     use_adaptive_position_aug = True
+2026-06-19 17:30:22 INFO     position_select_mode = sample
+2026-06-19 17:30:22 INFO     position_temperature = 0.5
+2026-06-19 17:30:22 INFO     position_importance_sim = cosine
+2026-06-19 17:30:22 INFO     kg_reliability_agg = max
+2026-06-19 17:30:22 INFO     adaptive_position_warmup_epochs = 5
+2026-06-19 17:30:22 INFO     adaptive_position_fallback = random
+2026-06-19 17:30:22 INFO     use_adaptive_profile = False
+2026-06-19 17:30:23 INFO     [1] Model Hyper-Parameter ---------------------
+2026-06-19 17:30:23 INFO     model: KGSCL
+2026-06-19 17:30:23 INFO     kg_data_type: other
+2026-06-19 17:30:23 INFO     model_type: KNOWLEDGE
+2026-06-19 17:30:23 INFO     embed_size: 128
+2026-06-19 17:30:23 INFO     ffn_hidden: 512
+2026-06-19 17:30:23 INFO     num_blocks: 2
+2026-06-19 17:30:23 INFO     num_heads: 2
+2026-06-19 17:30:23 INFO     hidden_dropout: 0.5
+2026-06-19 17:30:23 INFO     attn_dropout: 0.5
+2026-06-19 17:30:23 INFO     layer_norm_eps: 1e-12
+2026-06-19 17:30:23 INFO     initializer_range: 0.02
+2026-06-19 17:30:23 INFO     insert_ratio: 0.2
+2026-06-19 17:30:23 INFO     substitute_ratio: 0.7
+2026-06-19 17:30:23 INFO     tem1: 1.0
+2026-06-19 17:30:23 INFO     tem2: 1.0
+2026-06-19 17:30:23 INFO     sim: dot
+2026-06-19 17:30:23 INFO     lamda1: 0.1
+2026-06-19 17:30:23 INFO     lamda2: 1.0
+2026-06-19 17:30:23 INFO     use_mp_vt: False
+2026-06-19 17:30:23 INFO     mp_vt_top_m: 3
+2026-06-19 17:30:23 INFO     mp_vt_tau: None
+2026-06-19 17:30:23 INFO     use_adaptive_position_aug: True
+2026-06-19 17:30:23 INFO     position_select_mode: sample
+2026-06-19 17:30:23 INFO     position_temperature: 0.5
+2026-06-19 17:30:23 INFO     position_importance_sim: cosine
+2026-06-19 17:30:23 INFO     kg_reliability_agg: max
+2026-06-19 17:30:23 INFO     adaptive_position_warmup_epochs: 5
+2026-06-19 17:30:23 INFO     adaptive_position_fallback: random
+2026-06-19 17:30:23 INFO     adaptive_substitute_position: True
+2026-06-19 17:30:23 INFO     adaptive_insert_position: True
+2026-06-19 17:30:23 INFO     use_adaptive_profile: False
+2026-06-19 17:30:23 INFO     adaptive_profile_batches: 20
+2026-06-19 17:30:23 INFO     loss_type: CUSTOM
+2026-06-19 17:30:23 INFO     [2] Experiment Hyper-Parameter ----------------
+2026-06-19 17:30:23 INFO     [2-1] data hyper-parameter --------------------
+2026-06-19 17:30:23 INFO     dataset: home
+2026-06-19 17:30:23 INFO     data_aug: True
+2026-06-19 17:30:23 INFO     seq_filter_len: 0
+2026-06-19 17:30:23 INFO     if_filter_target: False
+2026-06-19 17:30:23 INFO     use_tar_len: False
+2026-06-19 17:30:23 INFO     target_len: 1
+2026-06-19 17:30:23 INFO     max_len: 50
+2026-06-19 17:30:23 INFO     min_seq_len: 1
+2026-06-19 17:30:23 INFO     max_seq_len: 100
+2026-06-19 17:30:23 INFO     [2-2] pretraining hyper-parameter -------------
+2026-06-19 17:30:23 INFO     do_pretraining: False
+2026-06-19 17:30:23 INFO     pretraining_task: MISP
+2026-06-19 17:30:23 INFO     pretraining_epoch: 10
+2026-06-19 17:30:23 INFO     pretraining_batch: 512
+2026-06-19 17:30:23 INFO     pretraining_lr: 0.001
+2026-06-19 17:30:23 INFO     pretraining_l2: 0.0
+2026-06-19 17:30:23 INFO     [2-3] training hyper-parameter ----------------
+2026-06-19 17:30:23 INFO     epoch_num: 100
+2026-06-19 17:30:23 INFO     train_batch: 512
+2026-06-19 17:30:23 INFO     learning_rate: 0.001
+2026-06-19 17:30:23 INFO     l2: 0.0
+2026-06-19 17:30:23 INFO     patience: 10
+2026-06-19 17:30:23 INFO     device: cuda:0
+2026-06-19 17:30:23 INFO     num_worker: 0
+2026-06-19 17:30:23 INFO     seed: 42
+2026-06-19 17:30:23 INFO     [2-4] evaluation hyper-parameter --------------
+2026-06-19 17:30:23 INFO     split_type: valid_and_test
+2026-06-19 17:30:23 INFO     split_mode: LS
+2026-06-19 17:30:23 INFO     eval_mode: full
+2026-06-19 17:30:23 INFO     metric: ['hit', 'ndcg']
+2026-06-19 17:30:23 INFO     k: [5, 10]
+2026-06-19 17:30:23 INFO     valid_metric: hit@10
+2026-06-19 17:30:23 INFO     eval_batch: 512
+2026-06-19 17:30:23 INFO     [2-5] save hyper-parameter --------------------
+2026-06-19 17:30:23 INFO     log_save: log
+2026-06-19 17:30:23 INFO     model_save: save
+2026-06-19 17:30:23 INFO     [3] Data Statistic ----------------------------
+2026-06-19 17:30:23 INFO     dataset: home
+2026-06-19 17:30:23 INFO     user number: 66485
+2026-06-19 17:30:23 INFO     item number: 28238
+2026-06-19 17:30:23 INFO     average seq length: 8.2271
+2026-06-19 17:30:23 INFO     density: 0.0003 sparsity: 0.9997
+2026-06-19 17:30:23 INFO     data after augmentation:
+2026-06-19 17:30:23 INFO     train samples: 347521	eval samples: 66485	test samples: 66485
+2026-06-19 17:30:23 INFO     [1] Model Architecture ------------------------
+2026-06-19 17:30:23 INFO     total parameters: 4017792
+2026-06-19 17:30:23 INFO     KGSCL(
+  (loss_fct): CrossEntropyLoss()
+  (item_embedding): Embedding(28239, 128, padding_idx=0)
+  (position_embedding): Embedding(50, 128)
+  (input_layer_norm): LayerNorm((128,), eps=1e-12, elementwise_affine=True)
+  (input_dropout): Dropout(p=0.5, inplace=False)
+  (trm_encoder): Transformer(
+    (encoder_layers): ModuleList(
+      (0-1): 2 x EncoderLayer(
+        (attn_layer_norm): LayerNorm((128,), eps=1e-12, elementwise_affine=True)
+        (pff_layer_norm): LayerNorm((128,), eps=1e-12, elementwise_affine=True)
+        (self_attention): MultiHeadAttentionLayer(
+          (fc_q): Linear(in_features=128, out_features=128, bias=True)
+          (fc_k): Linear(in_features=128, out_features=128, bias=True)
+          (fc_v): Linear(in_features=128, out_features=128, bias=True)
+          (attn_dropout): Dropout(p=0.5, inplace=False)
+          (fc_o): Linear(in_features=128, out_features=128, bias=True)
+        )
+        (pff): PointWiseFeedForwardLayer(
+          (fc1): Linear(in_features=128, out_features=512, bias=True)
+          (fc2): Linear(in_features=512, out_features=128, bias=True)
+        )
+        (hidden_dropout): Dropout(p=0.5, inplace=False)
+        (pff_out_drop): Dropout(p=0.5, inplace=False)
+      )
+    )
+  )
+  (nce_loss): InfoNCELoss(
+    (criterion): CrossEntropyLoss()
+  )
+  (cross_entropy): CrossEntropyLoss()
+)
+2026-06-19 17:30:23 INFO     Start training...
+2026-06-19 17:30:24 INFO     KGSCL epoch 0: position_mode=random, loss_rec=10.2747, loss_v2v=13.9129, loss_v2t=10.2726
+2026-06-19 17:32:28 INFO     ----------------------------Epoch 1----------------------------
+2026-06-19 17:32:28 INFO      Training Time :[124.3 s]	Training Loss = 19.9515
+2026-06-19 17:32:30 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.7189
+2026-06-19 17:32:30 INFO     hit@5:0.0069	hit@10:0.0116	ndcg@5:0.0042	ndcg@10:0.0057	
+2026-06-19 17:32:31 INFO     KGSCL epoch 1: position_mode=random, loss_rec=9.4754, loss_v2v=2.3883, loss_v2t=9.7366
+2026-06-19 17:34:35 INFO     ----------------------------Epoch 2----------------------------
+2026-06-19 17:34:35 INFO      Training Time :[124.1 s]	Training Loss = 19.3662
+2026-06-19 17:34:37 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.5449
+2026-06-19 17:34:37 INFO     hit@5:0.0122	hit@10:0.0204	ndcg@5:0.0075	ndcg@10:0.0101	
+2026-06-19 17:34:38 INFO     KGSCL epoch 2: position_mode=random, loss_rec=9.2293, loss_v2v=1.9982, loss_v2t=9.6355
+2026-06-19 17:36:41 INFO     ----------------------------Epoch 3----------------------------
+2026-06-19 17:36:41 INFO      Training Time :[124.1 s]	Training Loss = 18.9715
+2026-06-19 17:36:44 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.4413
+2026-06-19 17:36:44 INFO     hit@5:0.0171	hit@10:0.0269	ndcg@5:0.0104	ndcg@10:0.0136	
+2026-06-19 17:36:44 INFO     KGSCL epoch 3: position_mode=random, loss_rec=9.0508, loss_v2v=1.7357, loss_v2t=9.4367
+2026-06-19 17:38:47 INFO     ----------------------------Epoch 4----------------------------
+2026-06-19 17:38:47 INFO      Training Time :[123.1 s]	Training Loss = 18.6883
+2026-06-19 17:38:50 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.4094
+2026-06-19 17:38:50 INFO     hit@5:0.0198	hit@10:0.0321	ndcg@5:0.0126	ndcg@10:0.0165	
+2026-06-19 17:38:50 INFO     KGSCL epoch 4: position_mode=random, loss_rec=8.8373, loss_v2v=1.7027, loss_v2t=9.4009
+2026-06-19 17:40:53 INFO     ----------------------------Epoch 5----------------------------
+2026-06-19 17:40:53 INFO      Training Time :[123.2 s]	Training Loss = 18.4782
+2026-06-19 17:40:56 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.3836
+2026-06-19 17:40:56 INFO     hit@5:0.0226	hit@10:0.036	ndcg@5:0.0139	ndcg@10:0.0182	
+2026-06-19 17:40:57 INFO     KGSCL epoch 5: position_mode=adaptive, loss_rec=8.6133, loss_v2v=4.9203, loss_v2t=9.3794
+2026-06-19 17:40:57 INFO     PAKA epoch 5: avg_sub_selected_importance=0.3367, avg_sub_selected_reliability=0.4089, avg_sub_selected_score=0.2517, avg_ins_selected_importance=0.4789, avg_ins_selected_reliability=0.4689, avg_ins_selected_score=0.2770, sub_fallback_ratio=0.2949, ins_fallback_ratio=0.1543, avg_sub_position_from_end=7.3767, avg_ins_position_from_end=5.8477
+2026-06-19 17:48:52 INFO     ----------------------------Epoch 6----------------------------
+2026-06-19 17:48:52 INFO      Training Time :[475.5 s]	Training Loss = 18.5890
+2026-06-19 17:48:54 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.3368
+2026-06-19 17:48:54 INFO     hit@5:0.024	hit@10:0.0376	ndcg@5:0.0148	ndcg@10:0.0192	
+2026-06-19 17:48:55 INFO     KGSCL epoch 6: position_mode=adaptive, loss_rec=8.6492, loss_v2v=2.4127, loss_v2t=9.4635
+2026-06-19 17:48:55 INFO     PAKA epoch 6: avg_sub_selected_importance=0.3303, avg_sub_selected_reliability=0.3910, avg_sub_selected_score=0.2480, avg_ins_selected_importance=0.4620, avg_ins_selected_reliability=0.4244, avg_ins_selected_score=0.2406, sub_fallback_ratio=0.2695, ins_fallback_ratio=0.1230, avg_sub_position_from_end=8.7736, avg_ins_position_from_end=7.2398
+2026-06-19 17:56:49 INFO     ----------------------------Epoch 7----------------------------
+2026-06-19 17:56:49 INFO      Training Time :[474.4 s]	Training Loss = 18.4362
+2026-06-19 17:56:51 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.3282
+2026-06-19 17:56:51 INFO     hit@5:0.0256	hit@10:0.0398	ndcg@5:0.0157	ndcg@10:0.0202	
+2026-06-19 17:56:52 INFO     KGSCL epoch 7: position_mode=adaptive, loss_rec=8.4642, loss_v2v=2.5034, loss_v2t=9.2383
+2026-06-19 17:56:52 INFO     PAKA epoch 7: avg_sub_selected_importance=0.3385, avg_sub_selected_reliability=0.4046, avg_sub_selected_score=0.2592, avg_ins_selected_importance=0.4889, avg_ins_selected_reliability=0.4391, avg_ins_selected_score=0.2559, sub_fallback_ratio=0.2637, ins_fallback_ratio=0.1719, avg_sub_position_from_end=8.3076, avg_ins_position_from_end=6.2000
+2026-06-19 18:04:49 INFO     ----------------------------Epoch 8----------------------------
+2026-06-19 18:04:49 INFO      Training Time :[477.3 s]	Training Loss = 18.3239
+2026-06-19 18:04:51 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.3266
+2026-06-19 18:04:51 INFO     hit@5:0.026	hit@10:0.0412	ndcg@5:0.0157	ndcg@10:0.0206	
+2026-06-19 18:04:52 INFO     KGSCL epoch 8: position_mode=adaptive, loss_rec=8.5118, loss_v2v=2.4529, loss_v2t=9.3829
+2026-06-19 18:04:52 INFO     PAKA epoch 8: avg_sub_selected_importance=0.3331, avg_sub_selected_reliability=0.4045, avg_sub_selected_score=0.2551, avg_ins_selected_importance=0.4754, avg_ins_selected_reliability=0.4464, avg_ins_selected_score=0.2600, sub_fallback_ratio=0.2773, ins_fallback_ratio=0.1367, avg_sub_position_from_end=7.0724, avg_ins_position_from_end=5.3925
+2026-06-19 18:12:52 INFO     ----------------------------Epoch 9----------------------------
+2026-06-19 18:12:52 INFO      Training Time :[480.6 s]	Training Loss = 18.2255
+2026-06-19 18:12:55 INFO     Evaluation Time:[2.8 s]	  Eval Loss   = 9.326
+2026-06-19 18:12:55 INFO     hit@5:0.0275	hit@10:0.0427	ndcg@5:0.0167	ndcg@10:0.0217	
+2026-06-19 18:12:56 INFO     KGSCL epoch 9: position_mode=adaptive, loss_rec=8.4870, loss_v2v=2.4181, loss_v2t=9.4050
+2026-06-19 18:12:56 INFO     PAKA epoch 9: avg_sub_selected_importance=0.3288, avg_sub_selected_reliability=0.4005, avg_sub_selected_score=0.2528, avg_ins_selected_importance=0.4575, avg_ins_selected_reliability=0.4569, avg_ins_selected_score=0.2533, sub_fallback_ratio=0.2793, ins_fallback_ratio=0.1445, avg_sub_position_from_end=7.6228, avg_ins_position_from_end=6.3883
+2026-06-19 18:20:56 INFO     ----------------------------Epoch 10----------------------------
+2026-06-19 18:20:56 INFO      Training Time :[480.7 s]	Training Loss = 18.1421
+2026-06-19 18:20:58 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.3372
+2026-06-19 18:20:58 INFO     hit@5:0.0279	hit@10:0.0428	ndcg@5:0.0166	ndcg@10:0.0214	
+2026-06-19 18:20:59 INFO     KGSCL epoch 10: position_mode=adaptive, loss_rec=8.3617, loss_v2v=2.4627, loss_v2t=9.2933
+2026-06-19 18:20:59 INFO     PAKA epoch 10: avg_sub_selected_importance=0.3235, avg_sub_selected_reliability=0.3892, avg_sub_selected_score=0.2513, avg_ins_selected_importance=0.4690, avg_ins_selected_reliability=0.4133, avg_ins_selected_score=0.2411, sub_fallback_ratio=0.2656, ins_fallback_ratio=0.1484, avg_sub_position_from_end=8.3943, avg_ins_position_from_end=6.4885
+2026-06-19 18:28:56 INFO     ----------------------------Epoch 11----------------------------
+2026-06-19 18:28:56 INFO      Training Time :[477.8 s]	Training Loss = 18.0643
+2026-06-19 18:28:59 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.3477
+2026-06-19 18:28:59 INFO     hit@5:0.0283	hit@10:0.0452	ndcg@5:0.0166	ndcg@10:0.022	
+2026-06-19 18:28:59 INFO     KGSCL epoch 11: position_mode=adaptive, loss_rec=8.2926, loss_v2v=2.4101, loss_v2t=9.2804
+2026-06-19 18:28:59 INFO     PAKA epoch 11: avg_sub_selected_importance=0.3250, avg_sub_selected_reliability=0.3795, avg_sub_selected_score=0.2385, avg_ins_selected_importance=0.4628, avg_ins_selected_reliability=0.4450, avg_ins_selected_score=0.2567, sub_fallback_ratio=0.2715, ins_fallback_ratio=0.1191, avg_sub_position_from_end=6.9218, avg_ins_position_from_end=5.5224
+2026-06-19 18:36:58 INFO     ----------------------------Epoch 12----------------------------
+2026-06-19 18:36:58 INFO      Training Time :[479.5 s]	Training Loss = 17.9983
+2026-06-19 18:37:01 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.3552
+2026-06-19 18:37:01 INFO     hit@5:0.0285	hit@10:0.0457	ndcg@5:0.0167	ndcg@10:0.0222	
+2026-06-19 18:37:01 INFO     KGSCL epoch 12: position_mode=adaptive, loss_rec=8.1885, loss_v2v=2.2760, loss_v2t=9.3215
+2026-06-19 18:37:01 INFO     PAKA epoch 12: avg_sub_selected_importance=0.3229, avg_sub_selected_reliability=0.3872, avg_sub_selected_score=0.2456, avg_ins_selected_importance=0.4664, avg_ins_selected_reliability=0.4443, avg_ins_selected_score=0.2533, sub_fallback_ratio=0.2695, ins_fallback_ratio=0.1367, avg_sub_position_from_end=7.7338, avg_ins_position_from_end=6.0139
+2026-06-19 18:44:59 INFO     ----------------------------Epoch 13----------------------------
+2026-06-19 18:44:59 INFO      Training Time :[478.8 s]	Training Loss = 17.9377
+2026-06-19 18:45:02 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.3671
+2026-06-19 18:45:02 INFO     hit@5:0.0296	hit@10:0.0454	ndcg@5:0.0169	ndcg@10:0.022	
+2026-06-19 18:45:03 INFO     KGSCL epoch 13: position_mode=adaptive, loss_rec=8.1656, loss_v2v=2.2275, loss_v2t=9.2185
+2026-06-19 18:45:03 INFO     PAKA epoch 13: avg_sub_selected_importance=0.3091, avg_sub_selected_reliability=0.4122, avg_sub_selected_score=0.2730, avg_ins_selected_importance=0.4530, avg_ins_selected_reliability=0.4305, avg_ins_selected_score=0.2336, sub_fallback_ratio=0.2520, ins_fallback_ratio=0.1328, avg_sub_position_from_end=7.3758, avg_ins_position_from_end=5.6803
+2026-06-19 18:52:59 INFO     ----------------------------Epoch 14----------------------------
+2026-06-19 18:52:59 INFO      Training Time :[476.8 s]	Training Loss = 17.8881
+2026-06-19 18:53:01 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.3756
+2026-06-19 18:53:01 INFO     hit@5:0.0301	hit@10:0.0472	ndcg@5:0.0174	ndcg@10:0.0229	
+2026-06-19 18:53:02 INFO     KGSCL epoch 14: position_mode=adaptive, loss_rec=8.1285, loss_v2v=2.1966, loss_v2t=9.2432
+2026-06-19 18:53:02 INFO     PAKA epoch 14: avg_sub_selected_importance=0.3162, avg_sub_selected_reliability=0.3975, avg_sub_selected_score=0.2617, avg_ins_selected_importance=0.4565, avg_ins_selected_reliability=0.4163, avg_ins_selected_score=0.2361, sub_fallback_ratio=0.2891, ins_fallback_ratio=0.1543, avg_sub_position_from_end=8.8553, avg_ins_position_from_end=7.0529
+2026-06-19 19:00:58 INFO     ----------------------------Epoch 15----------------------------
+2026-06-19 19:00:58 INFO      Training Time :[476.9 s]	Training Loss = 17.8394
+2026-06-19 19:01:01 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.3985
+2026-06-19 19:01:01 INFO     hit@5:0.0301	hit@10:0.0474	ndcg@5:0.017	ndcg@10:0.0226	
+2026-06-19 19:01:02 INFO     KGSCL epoch 15: position_mode=adaptive, loss_rec=8.1824, loss_v2v=2.1651, loss_v2t=9.3196
+2026-06-19 19:01:02 INFO     PAKA epoch 15: avg_sub_selected_importance=0.3186, avg_sub_selected_reliability=0.4034, avg_sub_selected_score=0.2647, avg_ins_selected_importance=0.4774, avg_ins_selected_reliability=0.4380, avg_ins_selected_score=0.2484, sub_fallback_ratio=0.2676, ins_fallback_ratio=0.1777, avg_sub_position_from_end=7.4312, avg_ins_position_from_end=5.5719
+2026-06-19 19:08:57 INFO     ----------------------------Epoch 16----------------------------
+2026-06-19 19:08:57 INFO      Training Time :[476.1 s]	Training Loss = 17.7940
+2026-06-19 19:09:00 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.4251
+2026-06-19 19:09:00 INFO     hit@5:0.0303	hit@10:0.0473	ndcg@5:0.0171	ndcg@10:0.0226	
+2026-06-19 19:09:00 INFO     KGSCL epoch 16: position_mode=adaptive, loss_rec=8.1532, loss_v2v=2.3107, loss_v2t=9.1505
+2026-06-19 19:09:00 INFO     PAKA epoch 16: avg_sub_selected_importance=0.3197, avg_sub_selected_reliability=0.4046, avg_sub_selected_score=0.2574, avg_ins_selected_importance=0.4561, avg_ins_selected_reliability=0.4422, avg_ins_selected_score=0.2553, sub_fallback_ratio=0.3125, ins_fallback_ratio=0.1465, avg_sub_position_from_end=8.7321, avg_ins_position_from_end=7.0378
+2026-06-19 19:16:58 INFO     ----------------------------Epoch 17----------------------------
+2026-06-19 19:16:58 INFO      Training Time :[478.4 s]	Training Loss = 17.7537
+2026-06-19 19:17:01 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.4392
+2026-06-19 19:17:01 INFO     hit@5:0.0307	hit@10:0.0483	ndcg@5:0.0172	ndcg@10:0.0228	
+2026-06-19 19:17:01 INFO     KGSCL epoch 17: position_mode=adaptive, loss_rec=8.1409, loss_v2v=2.0695, loss_v2t=9.3431
+2026-06-19 19:17:01 INFO     PAKA epoch 17: avg_sub_selected_importance=0.3168, avg_sub_selected_reliability=0.3876, avg_sub_selected_score=0.2465, avg_ins_selected_importance=0.4635, avg_ins_selected_reliability=0.4768, avg_ins_selected_score=0.2798, sub_fallback_ratio=0.2832, ins_fallback_ratio=0.1250, avg_sub_position_from_end=7.9570, avg_ins_position_from_end=6.2289
+2026-06-19 19:24:57 INFO     ----------------------------Epoch 18----------------------------
+2026-06-19 19:24:57 INFO      Training Time :[476.3 s]	Training Loss = 17.7203
+2026-06-19 19:24:59 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.4311
+2026-06-19 19:24:59 INFO     hit@5:0.0307	hit@10:0.0482	ndcg@5:0.0173	ndcg@10:0.023	
+2026-06-19 19:25:00 INFO     KGSCL epoch 18: position_mode=adaptive, loss_rec=7.8229, loss_v2v=1.9151, loss_v2t=9.2113
+2026-06-19 19:25:00 INFO     PAKA epoch 18: avg_sub_selected_importance=0.3073, avg_sub_selected_reliability=0.4185, avg_sub_selected_score=0.2703, avg_ins_selected_importance=0.4646, avg_ins_selected_reliability=0.4411, avg_ins_selected_score=0.2548, sub_fallback_ratio=0.2871, ins_fallback_ratio=0.1309, avg_sub_position_from_end=7.4925, avg_ins_position_from_end=5.9290
+2026-06-19 19:32:56 INFO     ----------------------------Epoch 19----------------------------
+2026-06-19 19:32:56 INFO      Training Time :[476.9 s]	Training Loss = 17.6825
+2026-06-19 19:32:59 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.4643
+2026-06-19 19:32:59 INFO     hit@5:0.0313	hit@10:0.0489	ndcg@5:0.0175	ndcg@10:0.0231	
+2026-06-19 19:33:00 INFO     KGSCL epoch 19: position_mode=adaptive, loss_rec=8.0468, loss_v2v=1.8877, loss_v2t=9.3235
+2026-06-19 19:33:00 INFO     PAKA epoch 19: avg_sub_selected_importance=0.3101, avg_sub_selected_reliability=0.4000, avg_sub_selected_score=0.2584, avg_ins_selected_importance=0.4446, avg_ins_selected_reliability=0.4420, avg_ins_selected_score=0.2388, sub_fallback_ratio=0.2734, ins_fallback_ratio=0.1680, avg_sub_position_from_end=8.1540, avg_ins_position_from_end=6.3185
+2026-06-19 19:40:56 INFO     ----------------------------Epoch 20----------------------------
+2026-06-19 19:40:56 INFO      Training Time :[477.0 s]	Training Loss = 17.6575
+2026-06-19 19:40:59 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.4748
+2026-06-19 19:40:59 INFO     hit@5:0.0313	hit@10:0.0491	ndcg@5:0.0174	ndcg@10:0.0231	
+2026-06-19 19:40:59 INFO     KGSCL epoch 20: position_mode=adaptive, loss_rec=7.9611, loss_v2v=2.1280, loss_v2t=9.2848
+2026-06-19 19:40:59 INFO     PAKA epoch 20: avg_sub_selected_importance=0.3219, avg_sub_selected_reliability=0.3971, avg_sub_selected_score=0.2524, avg_ins_selected_importance=0.4820, avg_ins_selected_reliability=0.4386, avg_ins_selected_score=0.2602, sub_fallback_ratio=0.2891, ins_fallback_ratio=0.1562, avg_sub_position_from_end=7.9136, avg_ins_position_from_end=5.7868
+2026-06-19 19:48:55 INFO     ----------------------------Epoch 21----------------------------
+2026-06-19 19:48:55 INFO      Training Time :[476.4 s]	Training Loss = 17.6287
+2026-06-19 19:48:58 INFO     Evaluation Time:[2.6 s]	  Eval Loss   = 9.5054
+2026-06-19 19:48:58 INFO     hit@5:0.0317	hit@10:0.049	ndcg@5:0.0175	ndcg@10:0.0231	
+2026-06-19 19:48:58 INFO     KGSCL epoch 21: position_mode=adaptive, loss_rec=8.0236, loss_v2v=2.1152, loss_v2t=9.2247
+2026-06-19 19:48:58 INFO     PAKA epoch 21: avg_sub_selected_importance=0.3139, avg_sub_selected_reliability=0.3795, avg_sub_selected_score=0.2450, avg_ins_selected_importance=0.4527, avg_ins_selected_reliability=0.4483, avg_ins_selected_score=0.2538, sub_fallback_ratio=0.2969, ins_fallback_ratio=0.1621, avg_sub_position_from_end=9.2856, avg_ins_position_from_end=7.5472
+2026-06-19 19:56:54 INFO     ----------------------------Epoch 22----------------------------
+2026-06-19 19:56:54 INFO      Training Time :[476.8 s]	Training Loss = 17.5983
+2026-06-19 19:56:57 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.5075
+2026-06-19 19:56:57 INFO     hit@5:0.0315	hit@10:0.0488	ndcg@5:0.0176	ndcg@10:0.0231	
+2026-06-19 19:56:58 INFO     KGSCL epoch 22: position_mode=adaptive, loss_rec=7.9329, loss_v2v=2.1196, loss_v2t=9.2564
+2026-06-19 19:56:58 INFO     PAKA epoch 22: avg_sub_selected_importance=0.3105, avg_sub_selected_reliability=0.4029, avg_sub_selected_score=0.2655, avg_ins_selected_importance=0.4495, avg_ins_selected_reliability=0.4374, avg_ins_selected_score=0.2400, sub_fallback_ratio=0.2754, ins_fallback_ratio=0.1504, avg_sub_position_from_end=8.8602, avg_ins_position_from_end=6.8262
+2026-06-19 20:04:55 INFO     ----------------------------Epoch 23----------------------------
+2026-06-19 20:04:55 INFO      Training Time :[477.5 s]	Training Loss = 17.5756
+2026-06-19 20:04:57 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.5367
+2026-06-19 20:04:57 INFO     hit@5:0.0313	hit@10:0.0492	ndcg@5:0.0173	ndcg@10:0.0231	
+2026-06-19 20:04:58 INFO     KGSCL epoch 23: position_mode=adaptive, loss_rec=7.8846, loss_v2v=2.0108, loss_v2t=9.2883
+2026-06-19 20:04:58 INFO     PAKA epoch 23: avg_sub_selected_importance=0.3005, avg_sub_selected_reliability=0.4066, avg_sub_selected_score=0.2698, avg_ins_selected_importance=0.4506, avg_ins_selected_reliability=0.4411, avg_ins_selected_score=0.2471, sub_fallback_ratio=0.2500, ins_fallback_ratio=0.1445, avg_sub_position_from_end=7.0946, avg_ins_position_from_end=5.7878
+2026-06-19 20:12:54 INFO     ----------------------------Epoch 24----------------------------
+2026-06-19 20:12:54 INFO      Training Time :[476.9 s]	Training Loss = 17.5511
+2026-06-19 20:12:57 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.5375
+2026-06-19 20:12:57 INFO     hit@5:0.0317	hit@10:0.0496	ndcg@5:0.0175	ndcg@10:0.0233	
+2026-06-19 20:12:58 INFO     KGSCL epoch 24: position_mode=adaptive, loss_rec=7.9762, loss_v2v=1.9171, loss_v2t=9.4119
+2026-06-19 20:12:58 INFO     PAKA epoch 24: avg_sub_selected_importance=0.3063, avg_sub_selected_reliability=0.3908, avg_sub_selected_score=0.2530, avg_ins_selected_importance=0.4397, avg_ins_selected_reliability=0.4204, avg_ins_selected_score=0.2320, sub_fallback_ratio=0.2930, ins_fallback_ratio=0.1406, avg_sub_position_from_end=9.3725, avg_ins_position_from_end=7.5152
+2026-06-19 20:20:54 INFO     ----------------------------Epoch 25----------------------------
+2026-06-19 20:20:54 INFO      Training Time :[477.6 s]	Training Loss = 17.5303
+2026-06-19 20:20:57 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.5502
+2026-06-19 20:20:57 INFO     hit@5:0.0317	hit@10:0.0493	ndcg@5:0.0175	ndcg@10:0.0232	
+2026-06-19 20:20:58 INFO     KGSCL epoch 25: position_mode=adaptive, loss_rec=7.8602, loss_v2v=2.0919, loss_v2t=9.2165
+2026-06-19 20:20:58 INFO     PAKA epoch 25: avg_sub_selected_importance=0.3112, avg_sub_selected_reliability=0.3960, avg_sub_selected_score=0.2530, avg_ins_selected_importance=0.4711, avg_ins_selected_reliability=0.4659, avg_ins_selected_score=0.2685, sub_fallback_ratio=0.2734, ins_fallback_ratio=0.1289, avg_sub_position_from_end=7.9291, avg_ins_position_from_end=5.7972
+2026-06-19 20:28:55 INFO     ----------------------------Epoch 26----------------------------
+2026-06-19 20:28:55 INFO      Training Time :[477.8 s]	Training Loss = 17.5099
+2026-06-19 20:28:57 INFO     Evaluation Time:[2.6 s]	  Eval Loss   = 9.5626
+2026-06-19 20:28:57 INFO     hit@5:0.0321	hit@10:0.0495	ndcg@5:0.0176	ndcg@10:0.0232	
+2026-06-19 20:28:58 INFO     KGSCL epoch 26: position_mode=adaptive, loss_rec=7.7101, loss_v2v=1.9438, loss_v2t=9.1003
+2026-06-19 20:28:58 INFO     PAKA epoch 26: avg_sub_selected_importance=0.3136, avg_sub_selected_reliability=0.3821, avg_sub_selected_score=0.2462, avg_ins_selected_importance=0.4314, avg_ins_selected_reliability=0.4259, avg_ins_selected_score=0.2280, sub_fallback_ratio=0.2988, ins_fallback_ratio=0.1895, avg_sub_position_from_end=9.5268, avg_ins_position_from_end=7.9260
+2026-06-19 20:36:55 INFO     ----------------------------Epoch 27----------------------------
+2026-06-19 20:36:55 INFO      Training Time :[477.6 s]	Training Loss = 17.4952
+2026-06-19 20:36:57 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.5733
+2026-06-19 20:36:57 INFO     hit@5:0.032	hit@10:0.05	ndcg@5:0.0177	ndcg@10:0.0235	
+2026-06-19 20:36:58 INFO     KGSCL epoch 27: position_mode=adaptive, loss_rec=7.8514, loss_v2v=1.9116, loss_v2t=9.1834
+2026-06-19 20:36:58 INFO     PAKA epoch 27: avg_sub_selected_importance=0.3212, avg_sub_selected_reliability=0.4167, avg_sub_selected_score=0.2681, avg_ins_selected_importance=0.4701, avg_ins_selected_reliability=0.4347, avg_ins_selected_score=0.2511, sub_fallback_ratio=0.2832, ins_fallback_ratio=0.1426, avg_sub_position_from_end=7.6442, avg_ins_position_from_end=5.9054
+2026-06-19 20:44:57 INFO     ----------------------------Epoch 28----------------------------
+2026-06-19 20:44:57 INFO      Training Time :[479.7 s]	Training Loss = 17.4727
+2026-06-19 20:45:00 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.606
+2026-06-19 20:45:00 INFO     hit@5:0.0315	hit@10:0.0498	ndcg@5:0.0174	ndcg@10:0.0233	
+2026-06-19 20:45:00 INFO     KGSCL epoch 28: position_mode=adaptive, loss_rec=7.7124, loss_v2v=2.0344, loss_v2t=9.2868
+2026-06-19 20:45:00 INFO     PAKA epoch 28: avg_sub_selected_importance=0.3132, avg_sub_selected_reliability=0.3845, avg_sub_selected_score=0.2499, avg_ins_selected_importance=0.4504, avg_ins_selected_reliability=0.4460, avg_ins_selected_score=0.2484, sub_fallback_ratio=0.2812, ins_fallback_ratio=0.1426, avg_sub_position_from_end=8.6986, avg_ins_position_from_end=7.0278
+2026-06-19 20:52:56 INFO     ----------------------------Epoch 29----------------------------
+2026-06-19 20:52:56 INFO      Training Time :[476.2 s]	Training Loss = 17.4527
+2026-06-19 20:52:58 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.5998
+2026-06-19 20:52:58 INFO     hit@5:0.0315	hit@10:0.0499	ndcg@5:0.0175	ndcg@10:0.0235	
+2026-06-19 20:52:59 INFO     KGSCL epoch 29: position_mode=adaptive, loss_rec=7.8580, loss_v2v=1.9824, loss_v2t=9.2273
+2026-06-19 20:52:59 INFO     PAKA epoch 29: avg_sub_selected_importance=0.3142, avg_sub_selected_reliability=0.4171, avg_sub_selected_score=0.2716, avg_ins_selected_importance=0.4670, avg_ins_selected_reliability=0.4603, avg_ins_selected_score=0.2655, sub_fallback_ratio=0.2852, ins_fallback_ratio=0.1562, avg_sub_position_from_end=7.4558, avg_ins_position_from_end=5.7664
+2026-06-19 21:00:53 INFO     ----------------------------Epoch 30----------------------------
+2026-06-19 21:00:53 INFO      Training Time :[474.5 s]	Training Loss = 17.4380
+2026-06-19 21:00:56 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.6284
+2026-06-19 21:00:56 INFO     hit@5:0.0322	hit@10:0.0498	ndcg@5:0.0177	ndcg@10:0.0234	
+2026-06-19 21:00:56 INFO     KGSCL epoch 30: position_mode=adaptive, loss_rec=7.6806, loss_v2v=2.1955, loss_v2t=9.2108
+2026-06-19 21:00:56 INFO     PAKA epoch 30: avg_sub_selected_importance=0.3107, avg_sub_selected_reliability=0.4043, avg_sub_selected_score=0.2611, avg_ins_selected_importance=0.4741, avg_ins_selected_reliability=0.4429, avg_ins_selected_score=0.2585, sub_fallback_ratio=0.2832, ins_fallback_ratio=0.1230, avg_sub_position_from_end=7.5182, avg_ins_position_from_end=5.5790
+2026-06-19 21:08:50 INFO     ----------------------------Epoch 31----------------------------
+2026-06-19 21:08:50 INFO      Training Time :[474.6 s]	Training Loss = 17.4257
+2026-06-19 21:08:53 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.6202
+2026-06-19 21:08:53 INFO     hit@5:0.032	hit@10:0.05	ndcg@5:0.0177	ndcg@10:0.0234	
+2026-06-19 21:08:53 INFO     KGSCL epoch 31: position_mode=adaptive, loss_rec=7.6504, loss_v2v=2.0291, loss_v2t=9.1169
+2026-06-19 21:08:53 INFO     PAKA epoch 31: avg_sub_selected_importance=0.3092, avg_sub_selected_reliability=0.4094, avg_sub_selected_score=0.2647, avg_ins_selected_importance=0.4510, avg_ins_selected_reliability=0.4609, avg_ins_selected_score=0.2576, sub_fallback_ratio=0.2852, ins_fallback_ratio=0.1211, avg_sub_position_from_end=7.8111, avg_ins_position_from_end=6.3133
+2026-06-19 21:16:46 INFO     ----------------------------Epoch 32----------------------------
+2026-06-19 21:16:46 INFO      Training Time :[473.4 s]	Training Loss = 17.4078
+2026-06-19 21:16:49 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.6554
+2026-06-19 21:16:49 INFO     hit@5:0.0323	hit@10:0.0499	ndcg@5:0.0178	ndcg@10:0.0234	
+2026-06-19 21:16:49 INFO     KGSCL epoch 32: position_mode=adaptive, loss_rec=7.7499, loss_v2v=2.0841, loss_v2t=9.3037
+2026-06-19 21:16:49 INFO     PAKA epoch 32: avg_sub_selected_importance=0.3087, avg_sub_selected_reliability=0.3933, avg_sub_selected_score=0.2566, avg_ins_selected_importance=0.4667, avg_ins_selected_reliability=0.4376, avg_ins_selected_score=0.2533, sub_fallback_ratio=0.2773, ins_fallback_ratio=0.1504, avg_sub_position_from_end=7.7556, avg_ins_position_from_end=5.8120
+2026-06-19 21:24:43 INFO     ----------------------------Epoch 33----------------------------
+2026-06-19 21:24:43 INFO      Training Time :[474.2 s]	Training Loss = 17.3971
+2026-06-19 21:24:45 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.6469
+2026-06-19 21:24:45 INFO     hit@5:0.0318	hit@10:0.05	ndcg@5:0.0177	ndcg@10:0.0235	
+2026-06-19 21:24:46 INFO     KGSCL epoch 33: position_mode=adaptive, loss_rec=7.6187, loss_v2v=1.9936, loss_v2t=9.3240
+2026-06-19 21:24:46 INFO     PAKA epoch 33: avg_sub_selected_importance=0.3120, avg_sub_selected_reliability=0.3920, avg_sub_selected_score=0.2555, avg_ins_selected_importance=0.4558, avg_ins_selected_reliability=0.4421, avg_ins_selected_score=0.2499, sub_fallback_ratio=0.2617, ins_fallback_ratio=0.1328, avg_sub_position_from_end=8.4946, avg_ins_position_from_end=6.6877
+2026-06-19 21:32:42 INFO     ----------------------------Epoch 34----------------------------
+2026-06-19 21:32:42 INFO      Training Time :[477.0 s]	Training Loss = 17.3833
+2026-06-19 21:32:45 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.6697
+2026-06-19 21:32:45 INFO     hit@5:0.0327	hit@10:0.05	ndcg@5:0.018	ndcg@10:0.0236	
+2026-06-19 21:32:45 INFO     KGSCL epoch 34: position_mode=adaptive, loss_rec=7.7615, loss_v2v=1.9965, loss_v2t=9.3909
+2026-06-19 21:32:45 INFO     PAKA epoch 34: avg_sub_selected_importance=0.3131, avg_sub_selected_reliability=0.3904, avg_sub_selected_score=0.2557, avg_ins_selected_importance=0.4676, avg_ins_selected_reliability=0.4317, avg_ins_selected_score=0.2491, sub_fallback_ratio=0.2754, ins_fallback_ratio=0.1602, avg_sub_position_from_end=8.3452, avg_ins_position_from_end=6.7584
+2026-06-19 21:40:41 INFO     ----------------------------Epoch 35----------------------------
+2026-06-19 21:40:41 INFO      Training Time :[476.1 s]	Training Loss = 17.3723
+2026-06-19 21:40:44 INFO     Evaluation Time:[2.8 s]	  Eval Loss   = 9.6677
+2026-06-19 21:40:44 INFO     hit@5:0.0324	hit@10:0.0507	ndcg@5:0.0178	ndcg@10:0.0237	
+2026-06-19 21:40:44 INFO     KGSCL epoch 35: position_mode=adaptive, loss_rec=7.8067, loss_v2v=2.0915, loss_v2t=9.3765
+2026-06-19 21:40:44 INFO     PAKA epoch 35: avg_sub_selected_importance=0.3103, avg_sub_selected_reliability=0.4083, avg_sub_selected_score=0.2645, avg_ins_selected_importance=0.4634, avg_ins_selected_reliability=0.4697, avg_ins_selected_score=0.2673, sub_fallback_ratio=0.2734, ins_fallback_ratio=0.1309, avg_sub_position_from_end=7.3830, avg_ins_position_from_end=5.6603
+2026-06-19 21:48:39 INFO     ----------------------------Epoch 36----------------------------
+2026-06-19 21:48:39 INFO      Training Time :[475.6 s]	Training Loss = 17.3614
+2026-06-19 21:48:42 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.6978
+2026-06-19 21:48:42 INFO     hit@5:0.0326	hit@10:0.0503	ndcg@5:0.018	ndcg@10:0.0237	
+2026-06-19 21:48:42 INFO     KGSCL epoch 36: position_mode=adaptive, loss_rec=7.6917, loss_v2v=2.0004, loss_v2t=9.2710
+2026-06-19 21:48:42 INFO     PAKA epoch 36: avg_sub_selected_importance=0.3028, avg_sub_selected_reliability=0.3929, avg_sub_selected_score=0.2657, avg_ins_selected_importance=0.4475, avg_ins_selected_reliability=0.4358, avg_ins_selected_score=0.2428, sub_fallback_ratio=0.2656, ins_fallback_ratio=0.1523, avg_sub_position_from_end=8.6605, avg_ins_position_from_end=6.8277
+2026-06-19 21:56:39 INFO     ----------------------------Epoch 37----------------------------
+2026-06-19 21:56:39 INFO      Training Time :[477.8 s]	Training Loss = 17.3485
+2026-06-19 21:56:42 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.7085
+2026-06-19 21:56:42 INFO     hit@5:0.0325	hit@10:0.0501	ndcg@5:0.018	ndcg@10:0.0236	
+2026-06-19 21:56:43 INFO     KGSCL epoch 37: position_mode=adaptive, loss_rec=7.7754, loss_v2v=2.1163, loss_v2t=9.3146
+2026-06-19 21:56:43 INFO     PAKA epoch 37: avg_sub_selected_importance=0.2974, avg_sub_selected_reliability=0.3687, avg_sub_selected_score=0.2421, avg_ins_selected_importance=0.4370, avg_ins_selected_reliability=0.4120, avg_ins_selected_score=0.2280, sub_fallback_ratio=0.2793, ins_fallback_ratio=0.1406, avg_sub_position_from_end=9.6499, avg_ins_position_from_end=7.5388
+2026-06-19 22:04:40 INFO     ----------------------------Epoch 38----------------------------
+2026-06-19 22:04:40 INFO      Training Time :[477.5 s]	Training Loss = 17.3373
+2026-06-19 22:04:42 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.6985
+2026-06-19 22:04:42 INFO     hit@5:0.0322	hit@10:0.0498	ndcg@5:0.0177	ndcg@10:0.0233	
+2026-06-19 22:04:43 INFO     KGSCL epoch 38: position_mode=adaptive, loss_rec=7.5899, loss_v2v=2.0596, loss_v2t=9.2913
+2026-06-19 22:04:43 INFO     PAKA epoch 38: avg_sub_selected_importance=0.3131, avg_sub_selected_reliability=0.4078, avg_sub_selected_score=0.2671, avg_ins_selected_importance=0.4419, avg_ins_selected_reliability=0.4495, avg_ins_selected_score=0.2475, sub_fallback_ratio=0.2656, ins_fallback_ratio=0.1543, avg_sub_position_from_end=7.3808, avg_ins_position_from_end=5.9003
+2026-06-19 22:12:38 INFO     ----------------------------Epoch 39----------------------------
+2026-06-19 22:12:38 INFO      Training Time :[475.8 s]	Training Loss = 17.3264
+2026-06-19 22:12:41 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.7286
+2026-06-19 22:12:41 INFO     hit@5:0.032	hit@10:0.0496	ndcg@5:0.0178	ndcg@10:0.0235	
+2026-06-19 22:12:41 INFO     KGSCL epoch 39: position_mode=adaptive, loss_rec=7.6790, loss_v2v=1.9755, loss_v2t=9.2655
+2026-06-19 22:12:41 INFO     PAKA epoch 39: avg_sub_selected_importance=0.3198, avg_sub_selected_reliability=0.4103, avg_sub_selected_score=0.2630, avg_ins_selected_importance=0.4679, avg_ins_selected_reliability=0.4687, avg_ins_selected_score=0.2704, sub_fallback_ratio=0.2969, ins_fallback_ratio=0.1270, avg_sub_position_from_end=7.1521, avg_ins_position_from_end=5.5993
+2026-06-19 22:20:38 INFO     ----------------------------Epoch 40----------------------------
+2026-06-19 22:20:38 INFO      Training Time :[477.0 s]	Training Loss = 17.3190
+2026-06-19 22:20:40 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.736
+2026-06-19 22:20:40 INFO     hit@5:0.032	hit@10:0.0502	ndcg@5:0.0177	ndcg@10:0.0235	
+2026-06-19 22:20:41 INFO     KGSCL epoch 40: position_mode=adaptive, loss_rec=7.7442, loss_v2v=2.0874, loss_v2t=9.3690
+2026-06-19 22:20:41 INFO     PAKA epoch 40: avg_sub_selected_importance=0.3097, avg_sub_selected_reliability=0.3933, avg_sub_selected_score=0.2566, avg_ins_selected_importance=0.4515, avg_ins_selected_reliability=0.4336, avg_ins_selected_score=0.2387, sub_fallback_ratio=0.2910, ins_fallback_ratio=0.1465, avg_sub_position_from_end=7.5743, avg_ins_position_from_end=6.2037
+2026-06-19 22:28:37 INFO     ----------------------------Epoch 41----------------------------
+2026-06-19 22:28:37 INFO      Training Time :[476.9 s]	Training Loss = 17.3079
+2026-06-19 22:28:40 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.7297
+2026-06-19 22:28:40 INFO     hit@5:0.0322	hit@10:0.0503	ndcg@5:0.0177	ndcg@10:0.0236	
+2026-06-19 22:28:40 INFO     KGSCL epoch 41: position_mode=adaptive, loss_rec=7.6946, loss_v2v=2.1096, loss_v2t=9.2866
+2026-06-19 22:28:40 INFO     PAKA epoch 41: avg_sub_selected_importance=0.3173, avg_sub_selected_reliability=0.3958, avg_sub_selected_score=0.2556, avg_ins_selected_importance=0.4634, avg_ins_selected_reliability=0.4471, avg_ins_selected_score=0.2480, sub_fallback_ratio=0.2871, ins_fallback_ratio=0.1504, avg_sub_position_from_end=8.1972, avg_ins_position_from_end=6.1572
+2026-06-19 22:36:36 INFO     ----------------------------Epoch 42----------------------------
+2026-06-19 22:36:36 INFO      Training Time :[475.9 s]	Training Loss = 17.3019
+2026-06-19 22:36:38 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.7368
+2026-06-19 22:36:38 INFO     hit@5:0.0314	hit@10:0.0498	ndcg@5:0.0173	ndcg@10:0.0233	
+2026-06-19 22:36:39 INFO     KGSCL epoch 42: position_mode=adaptive, loss_rec=7.8008, loss_v2v=1.8627, loss_v2t=9.3733
+2026-06-19 22:36:39 INFO     PAKA epoch 42: avg_sub_selected_importance=0.3183, avg_sub_selected_reliability=0.4224, avg_sub_selected_score=0.2748, avg_ins_selected_importance=0.4734, avg_ins_selected_reliability=0.4493, avg_ins_selected_score=0.2566, sub_fallback_ratio=0.2734, ins_fallback_ratio=0.1523, avg_sub_position_from_end=6.6765, avg_ins_position_from_end=5.1076
+2026-06-19 22:44:36 INFO     ----------------------------Epoch 43----------------------------
+2026-06-19 22:44:36 INFO      Training Time :[477.5 s]	Training Loss = 17.2871
+2026-06-19 22:44:38 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.7491
+2026-06-19 22:44:38 INFO     hit@5:0.0328	hit@10:0.0502	ndcg@5:0.018	ndcg@10:0.0236	
+2026-06-19 22:44:39 INFO     KGSCL epoch 43: position_mode=adaptive, loss_rec=7.5841, loss_v2v=1.9006, loss_v2t=9.1883
+2026-06-19 22:44:39 INFO     PAKA epoch 43: avg_sub_selected_importance=0.3138, avg_sub_selected_reliability=0.3968, avg_sub_selected_score=0.2537, avg_ins_selected_importance=0.4545, avg_ins_selected_reliability=0.4222, avg_ins_selected_score=0.2413, sub_fallback_ratio=0.2930, ins_fallback_ratio=0.1660, avg_sub_position_from_end=7.4648, avg_ins_position_from_end=5.7741
+2026-06-19 22:52:35 INFO     ----------------------------Epoch 44----------------------------
+2026-06-19 22:52:35 INFO      Training Time :[477.4 s]	Training Loss = 17.2812
+2026-06-19 22:52:38 INFO     Evaluation Time:[2.5 s]	  Eval Loss   = 9.7851
+2026-06-19 22:52:38 INFO     hit@5:0.0324	hit@10:0.0498	ndcg@5:0.0179	ndcg@10:0.0235	
+2026-06-19 22:52:39 INFO     KGSCL epoch 44: position_mode=adaptive, loss_rec=7.5402, loss_v2v=1.9776, loss_v2t=9.3663
+2026-06-19 22:52:39 INFO     PAKA epoch 44: avg_sub_selected_importance=0.3098, avg_sub_selected_reliability=0.3948, avg_sub_selected_score=0.2492, avg_ins_selected_importance=0.4529, avg_ins_selected_reliability=0.4451, avg_ins_selected_score=0.2542, sub_fallback_ratio=0.3301, ins_fallback_ratio=0.1484, avg_sub_position_from_end=8.1627, avg_ins_position_from_end=6.1489
+2026-06-19 23:00:34 INFO     ----------------------------Epoch 45----------------------------
+2026-06-19 23:00:34 INFO      Training Time :[475.9 s]	Training Loss = 17.2703
+2026-06-19 23:00:37 INFO     Evaluation Time:[2.7 s]	  Eval Loss   = 9.7729
+2026-06-19 23:00:37 INFO     hit@5:0.0321	hit@10:0.0503	ndcg@5:0.0178	ndcg@10:0.0237	
+2026-06-19 23:00:37 INFO     ------------------------Best Evaluation------------------------
+2026-06-19 23:00:37 INFO     Best Result at Epoch: 35	 Early Stop at Patience: 10
+2026-06-19 23:00:37 INFO     hit@5:0.0324	hit@10:0.0507	ndcg@5:0.0178	ndcg@10:0.0237	
+2026-06-19 23:00:39 INFO     -----------------------------Test Results------------------------------
+2026-06-19 23:00:39 INFO     hit@5:0.0286	hit@10:0.0437	ndcg@5:0.0162	ndcg@10:0.021	

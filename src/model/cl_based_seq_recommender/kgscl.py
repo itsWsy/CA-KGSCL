@@ -46,6 +46,10 @@ class KGSCL(AbstractRecommender):
         self.adaptive_profile_batches = config.adaptive_profile_batches
         self.kg_relation_dict = kg_map.get('kg_relation_dict', {}) if isinstance(kg_map, dict) else {}
         self.co_occurrence_dict = kg_map.get('co_occurrence_dict', {}) if isinstance(kg_map, dict) else {}
+        self._sub_candidate_cache = None
+        self._sub_prob_cache = None
+        self._ins_candidate_cache = None
+        self._ins_prob_cache = None
         self._loss_logged_epochs = set()
         self._position_logged_epochs = set()
         self._profile_batch_count = 0
@@ -68,6 +72,7 @@ class KGSCL(AbstractRecommender):
         self.cross_entropy = nn.CrossEntropyLoss()
         if self.use_adaptive_position_aug:
             start_time = time.perf_counter()
+            self._build_neighbor_sampling_cache()
             self.register_buffer('sub_reliability_table', self._build_reliability_table('s'), persistent=False)
             self.register_buffer('ins_reliability_table', self._build_reliability_table('c'), persistent=False)
             logging.info(f'Built reliability tables once: shape={self.sub_reliability_table.size()}, '
@@ -213,6 +218,45 @@ class KGSCL(AbstractRecommender):
                 table[item_id] = float(max(scores))
         return table
 
+    def _build_neighbor_sampling_cache(self):
+        """PAKA: cache shifted KG candidates and sampling probabilities for adaptive augmentation."""
+        self._sub_candidate_cache = [[] for _ in range(self.num_items)]
+        self._sub_prob_cache = [None for _ in range(self.num_items)]
+        self._ins_candidate_cache = [[] for _ in range(self.num_items)]
+        self._ins_prob_cache = [None for _ in range(self.num_items)]
+
+        for item_id in range(1, self.num_items):
+            raw_item = item_id - 1
+            relation_info = self.kg_relation_dict.get(raw_item, {})
+            score_info = self.co_occurrence_dict.get(raw_item, {})
+            if not isinstance(relation_info, dict):
+                continue
+            if not isinstance(score_info, dict):
+                score_info = {}
+
+            sub_candidates = relation_info.get('s', [])
+            if len(sub_candidates) > 0:
+                self._sub_candidate_cache[item_id] = np.asarray([int(item) + 1 for item in sub_candidates])
+                sub_prob = score_info.get('s', None)
+                self._sub_prob_cache[item_id] = np.asarray(sub_prob, dtype=np.float64) if sub_prob is not None else None
+
+            ins_candidates = relation_info.get('c', [])
+            if len(ins_candidates) > 0:
+                self._ins_candidate_cache[item_id] = np.asarray([int(item) + 1 for item in ins_candidates])
+                ins_prob = score_info.get('c', None)
+                self._ins_prob_cache[item_id] = np.asarray(ins_prob, dtype=np.float64) if ins_prob is not None else None
+
+    def _sample_cached_neighbor(self, item, relation_type):
+        if relation_type == 's':
+            candidates = self._sub_candidate_cache[item]
+            probs = self._sub_prob_cache[item]
+        else:
+            candidates = self._ins_candidate_cache[item]
+            probs = self._ins_prob_cache[item]
+        if len(candidates) == 0:
+            return None
+        return int(np.random.choice(candidates, size=1, p=probs)[0])
+
     def build_adaptive_augmented_views(self, item_seq, seq_len, seq_hidden):
         """PAKA: build two KG augmented views using adaptive position selection."""
         with torch.no_grad():
@@ -303,19 +347,16 @@ class KGSCL(AbstractRecommender):
         copied_item_seq = copy.deepcopy(item_seq)
         insert_num = int(self.insert_ratio * len(copied_item_seq))
         if selected_positions is None:
-            insert_index = random.sample([i for i in range(len(copied_item_seq))], k=insert_num)
+            insert_index = set(random.sample([i for i in range(len(copied_item_seq))], k=insert_num))
         else:
-            insert_index = list(selected_positions)
+            insert_index = set(selected_positions)
         new_item_seq = []
         for index, item in enumerate(copied_item_seq):
             new_item_seq.append(item)
             if index in insert_index:
-                shifted_item = item - 1
-                insert_candidates = self.kg_relation_dict.get(shifted_item, {'c': []})['c']
-                if len(insert_candidates) > 0:
-                    insert_frequency = self.co_occurrence_dict.get(shifted_item, {'c': []})['c']
-                    insert_item = np.random.choice(insert_candidates, size=1, p=insert_frequency)[0]
-                    new_item_seq.append(insert_item + 1)
+                insert_item = self._sample_cached_neighbor(item, 'c')
+                if insert_item is not None:
+                    new_item_seq.append(insert_item)
                 else:
                     new_item_seq.append(item)
         return new_item_seq
@@ -324,18 +365,15 @@ class KGSCL(AbstractRecommender):
         copied_item_seq = copy.deepcopy(item_seq)
         substitute_num = int(self.substitute_ratio * len(copied_item_seq))
         if selected_positions is None:
-            substitute_index = random.sample([i for i in range(len(copied_item_seq))], k=substitute_num)
+            substitute_index = set(random.sample([i for i in range(len(copied_item_seq))], k=substitute_num))
         else:
-            substitute_index = list(selected_positions)
+            substitute_index = set(selected_positions)
         new_item_seq = []
         for index, item in enumerate(copied_item_seq):
             if index in substitute_index:
-                shifted_item = item - 1
-                substitute_candidates = self.kg_relation_dict.get(shifted_item, {'s': []})['s']
-                if len(substitute_candidates) > 0:
-                    substitute_frequency = self.co_occurrence_dict.get(shifted_item, {'s': []})['s']
-                    substitute_item = np.random.choice(substitute_candidates, size=1, p=substitute_frequency)[0]
-                    new_item_seq.append(substitute_item + 1)
+                substitute_item = self._sample_cached_neighbor(item, 's')
+                if substitute_item is not None:
+                    new_item_seq.append(substitute_item)
                 else:
                     new_item_seq.append(item)
                     new_item_seq.append(item)

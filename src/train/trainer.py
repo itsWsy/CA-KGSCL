@@ -120,6 +120,8 @@ class Trainer:
 
         logging.info('Start training...')
         for epoch in range(self.epoch_num):
+            if hasattr(train_dataset, 'set_epoch'):
+                train_dataset.set_epoch(epoch)
             self.training_model.train()
             self.recorder.epoch_restart()
             self.recorder.tik_start()

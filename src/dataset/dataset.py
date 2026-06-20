@@ -68,6 +68,11 @@ class KGSCLDataset(BaseSequentialDataset):
         self.substitute_ratio = config.substitute_ratio
         self.kg_relation_dict = additional_data_dict['kg_relation_dict']
         self.co_occurrence_dict = additional_data_dict['co_occurrence_dict']
+        self.current_epoch = 0
+
+    def set_epoch(self, epoch):
+        """Set current epoch so adaptive training can skip unused random views after warm-up."""
+        self.current_epoch = epoch
 
     def __getitem__(self, index):
         # for eval and test
@@ -84,19 +89,31 @@ class KGSCLDataset(BaseSequentialDataset):
         item_seq = item_seq + (self.max_len - seq_len) * [0]
         assert len(item_seq) == self.max_len
 
-        # aug seq 1
-        aug_seq_1 = self.KG_guided_augmentation(origin_item_seq)
-        aug_seq_len_1 = len(aug_seq_1) if len(aug_seq_1) < self.max_len else self.max_len
-        aug_seq_1 = aug_seq_1[-self.max_len:]
-        aug_seq_1 = aug_seq_1 + [0] * (self.max_len - len(aug_seq_1))
-        assert len(aug_seq_1) == self.max_len
+        skip_random_view = (
+            getattr(self.config, 'use_adaptive_position_aug', False)
+            and self.current_epoch >= getattr(self.config, 'adaptive_position_warmup_epochs', 5)
+        )
 
-        # aug seq 2
-        aug_seq_2 = self.KG_guided_augmentation(origin_item_seq)
-        aug_seq_len_2 = len(aug_seq_2) if len(aug_seq_2) < self.max_len else self.max_len
-        aug_seq_2 = aug_seq_2[-self.max_len:]
-        aug_seq_2 = aug_seq_2 + [0] * (self.max_len - len(aug_seq_2))
-        assert len(aug_seq_2) == self.max_len
+        if skip_random_view:
+            # Adaptive PAKA rebuilds both views in the model; avoid unused random KG augmentation here.
+            aug_seq_1 = item_seq
+            aug_seq_len_1 = seq_len
+            aug_seq_2 = item_seq
+            aug_seq_len_2 = seq_len
+        else:
+            # aug seq 1
+            aug_seq_1 = self.KG_guided_augmentation(origin_item_seq)
+            aug_seq_len_1 = len(aug_seq_1) if len(aug_seq_1) < self.max_len else self.max_len
+            aug_seq_1 = aug_seq_1[-self.max_len:]
+            aug_seq_1 = aug_seq_1 + [0] * (self.max_len - len(aug_seq_1))
+            assert len(aug_seq_1) == self.max_len
+
+            # aug seq 2
+            aug_seq_2 = self.KG_guided_augmentation(origin_item_seq)
+            aug_seq_len_2 = len(aug_seq_2) if len(aug_seq_2) < self.max_len else self.max_len
+            aug_seq_2 = aug_seq_2[-self.max_len:]
+            aug_seq_2 = aug_seq_2 + [0] * (self.max_len - len(aug_seq_2))
+            assert len(aug_seq_2) == self.max_len
 
         # augment target item
         aug_target, pos_item_set = self.target_substitution(target)
