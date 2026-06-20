@@ -73,6 +73,8 @@ def get_default_config():
                         help='num_workers for dataloader, best: 6')
     parser.add_argument('--mark', default='', type=str,
                         help='mark of this run which will be added to the name of the log')
+    parser.add_argument('--sh', default='', type=str,
+                        help='shell/script file name used in log file name')
 
     # Evaluation
     parser.add_argument('--split_type', default='valid_and_test', choices=['valid_only', 'valid_and_test'])

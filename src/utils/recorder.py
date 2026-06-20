@@ -13,6 +13,7 @@ class Recorder:
         self.model_name = config.model
         self.dataset = config.dataset
         self.run_mark = config.mark
+        self.sh_file = getattr(config, 'sh', '')
         self.log_path = config.log_save
         # metric
         self.metrics = config.metric
@@ -58,13 +59,14 @@ class Recorder:
         save_path = os.path.join(self.log_path, self.dataset)
         if not os.path.isdir(save_path):
             os.makedirs(save_path)
-        times = 1
-        log_model_name = self.model_name + f'-{self.run_mark}' if len(self.run_mark) > 0 else self.model_name
-        log_file = os.path.join(save_path, '%s_%d.log' % (log_model_name, times))
-        for i in range(100):
-            if not os.path.isfile(log_file):
-                break
-            log_file = os.path.join(save_path, '%s_%d.log' % (log_model_name, times + i + 1))
+        timestamp = datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d_%H-%M-%S')
+        if len(self.sh_file) > 0:
+            sh_name = os.path.splitext(os.path.basename(self.sh_file))[0]
+            sh_name = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in sh_name)
+            log_file = os.path.join(save_path, f'{self.dataset}_{sh_name}_{timestamp}.log')
+        else:
+            log_model_name = self.model_name + f'-{self.run_mark}' if len(self.run_mark) > 0 else self.model_name
+            log_file = os.path.join(save_path, f'{self.dataset}_{log_model_name}_{timestamp}.log')
 
         logging.basicConfig(
             format='%(asctime)s %(levelname)-8s %(message)s',

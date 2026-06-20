@@ -61,6 +61,7 @@ if __name__ == '__main__':
     parser.add_argument('--l2', default=0., type=float, help='l2 normalization')  # 1e-6
     parser.add_argument('--patience', default=10, help='early stop patience')
     parser.add_argument('--mark', default='', type=str)
+    parser.add_argument('--sh', default='', type=str, help='shell/script file name used in log file name')
     parser.add_argument('--device', default='cuda:0', type=str)
 
     # Evaluation
