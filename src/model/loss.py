@@ -250,6 +250,62 @@ def select_adaptive_positions(position_scores, seq_mask, ratio, mode="sample", t
     return selected_positions, fallback_flags
 
 
+def select_adaptive_position_mask(position_scores, seq_mask, ratio, mode="sample", temperature=0.5, fallback="random"):
+    """PAKA: select positions and return only a [B, L] bool mask to avoid CPU list conversion."""
+    selected_mask = torch.zeros_like(seq_mask, dtype=torch.bool)
+    fallback_flags = torch.zeros(seq_mask.size(0), dtype=torch.float, device=seq_mask.device)
+    temperature = max(float(temperature), 1e-8)
+
+    with torch.no_grad():
+        scores = position_scores.detach()
+        mask = seq_mask.detach()
+        for batch_idx in range(scores.size(0)):
+            valid_positions = torch.nonzero(mask[batch_idx], as_tuple=False).view(-1)
+            valid_len = int(valid_positions.numel())
+            if valid_len == 0 or ratio <= 0:
+                continue
+
+            raw_select_num = float(ratio) * valid_len
+            select_num = int(raw_select_num)
+            if raw_select_num > select_num:
+                select_num += 1
+            select_num = max(1, min(select_num, valid_len))
+            valid_scores = scores[batch_idx][valid_positions]
+            valid_scores = torch.nan_to_num(valid_scores, nan=0.0, posinf=0.0, neginf=0.0)
+            positive_mask = valid_scores > 0
+            use_fallback = bool((not torch.isfinite(valid_scores).all()) or valid_scores.max() <= 0)
+
+            if use_fallback:
+                perm = torch.randperm(valid_len, device=valid_positions.device)[:select_num]
+                chosen = valid_positions[perm]
+                fallback_flags[batch_idx] = 1.0
+            else:
+                positive_num = int(positive_mask.sum().item())
+                if positive_num < select_num:
+                    positive_positions = valid_positions[positive_mask]
+                    zero_positions = valid_positions[~positive_mask]
+                    fill_num = select_num - int(positive_positions.numel())
+                    if fill_num > 0 and zero_positions.numel() > 0:
+                        perm = torch.randperm(zero_positions.numel(), device=zero_positions.device)[:fill_num]
+                        fill = zero_positions[perm]
+                        chosen = torch.cat([positive_positions, fill], dim=0)
+                    else:
+                        chosen = positive_positions
+                elif mode == "topk":
+                    _, top_indices = torch.topk(valid_scores, k=select_num)
+                    chosen = valid_positions[top_indices]
+                elif mode == "sample":
+                    prob = torch.softmax(valid_scores / temperature, dim=0)
+                    sample_indices = torch.multinomial(prob, num_samples=select_num, replacement=False)
+                    chosen = valid_positions[sample_indices]
+                else:
+                    raise ValueError("position_select_mode should be sample or topk")
+
+            selected_mask[batch_idx, chosen] = True
+
+    return selected_mask, fallback_flags
+
+
 def _get_aligned_substitute_scores(item_id, corr_score):
     if not isinstance(corr_score, dict):
         return None

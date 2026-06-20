@@ -49,6 +49,7 @@ if __name__ == '__main__':
     parser.add_argument('--adaptive_insert_position', nargs='?', const=True, default=True, type=str2bool)
     parser.add_argument('--use_adaptive_profile', nargs='?', const=True, default=False, type=str2bool)
     parser.add_argument('--adaptive_profile_batches', default=20, type=int)
+    parser.add_argument('--adaptive_position_selection_impl', default='cpu', type=str, choices=['cpu', 'mask', 'legacy'])
     # Data
     parser.add_argument('--dataset', default='toys', type=str)
     parser.add_argument('--data_aug', action='store_false', help='data augmentation')

@@ -1,6 +1,5 @@
 "Knowledge-Guided Semantically Consistent Contrastive Learning for Sequential Recommendation"
 
-import copy
 import logging
 import random
 import time
@@ -15,7 +14,7 @@ from torch.nn.init import xavier_normal_, xavier_uniform_
 
 from src.model.loss import (InfoNCELoss, multi_positive_view_target_loss, compute_position_importance,
                             compute_kg_reliability_for_sequence, compute_adaptive_position_scores,
-                            select_adaptive_positions)
+                            select_adaptive_positions, select_adaptive_position_mask)
 from src.model.sequential_encoder import Transformer
 from src.utils.utils import HyperParamDict
 
@@ -44,6 +43,7 @@ class KGSCL(AbstractRecommender):
         self.adaptive_insert_position = config.adaptive_insert_position
         self.use_adaptive_profile = config.use_adaptive_profile
         self.adaptive_profile_batches = config.adaptive_profile_batches
+        self.adaptive_position_selection_impl = getattr(config, 'adaptive_position_selection_impl', 'cpu')
         self.kg_relation_dict = kg_map.get('kg_relation_dict', {}) if isinstance(kg_map, dict) else {}
         self.co_occurrence_dict = kg_map.get('co_occurrence_dict', {}) if isinstance(kg_map, dict) else {}
         self._sub_candidate_cache = None
@@ -95,6 +95,7 @@ class KGSCL(AbstractRecommender):
         logging.info(f'adaptive_position_warmup_epochs = {self.adaptive_position_warmup_epochs}')
         logging.info(f'adaptive_position_fallback = {self.adaptive_position_fallback}')
         logging.info(f'use_adaptive_profile = {self.use_adaptive_profile}')
+        logging.info(f'adaptive_position_selection_impl = {self.adaptive_position_selection_impl}')
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Embedding, nn.Linear)):
@@ -238,13 +239,25 @@ class KGSCL(AbstractRecommender):
             if len(sub_candidates) > 0:
                 self._sub_candidate_cache[item_id] = np.asarray([int(item) + 1 for item in sub_candidates])
                 sub_prob = score_info.get('s', None)
-                self._sub_prob_cache[item_id] = np.asarray(sub_prob, dtype=np.float64) if sub_prob is not None else None
+                self._sub_prob_cache[item_id] = self._normalize_sampling_prob(sub_prob, len(sub_candidates))
 
             ins_candidates = relation_info.get('c', [])
             if len(ins_candidates) > 0:
                 self._ins_candidate_cache[item_id] = np.asarray([int(item) + 1 for item in ins_candidates])
                 ins_prob = score_info.get('c', None)
-                self._ins_prob_cache[item_id] = np.asarray(ins_prob, dtype=np.float64) if ins_prob is not None else None
+                self._ins_prob_cache[item_id] = self._normalize_sampling_prob(ins_prob, len(ins_candidates))
+
+    @staticmethod
+    def _normalize_sampling_prob(prob, expected_len):
+        if prob is None:
+            return None
+        prob = np.asarray(prob, dtype=np.float64)
+        if prob.size != expected_len:
+            return None
+        prob_sum = prob.sum()
+        if prob_sum <= 0 or not np.isfinite(prob_sum):
+            return None
+        return prob / prob_sum
 
     def _sample_cached_neighbor(self, item, relation_type):
         if relation_type == 's':
@@ -284,21 +297,61 @@ class KGSCL(AbstractRecommender):
             self._profile_stop('position_scores')
 
             self._profile_start('sub_position_selection')
-            sub_positions, sub_fallback, sub_selected_mask = select_adaptive_positions(
-                sub_scores, seq_mask, self.substitute_ratio, mode=self.position_select_mode,
-                temperature=self.position_temperature, fallback=self.adaptive_position_fallback, return_mask=True
-            )
+            seq_mask_np = None
+            sub_mask_np = None
+            ins_mask_np = None
+            if self.adaptive_position_selection_impl == 'cpu':
+                seq_mask_np = seq_mask.detach().cpu().numpy().astype(bool)
+                sub_mask_np, sub_fallback_np = self._select_adaptive_position_mask_cpu(
+                    sub_scores, seq_mask_np, self.substitute_ratio
+                )
+                sub_selected_mask = torch.as_tensor(sub_mask_np, dtype=torch.bool, device=item_seq.device)
+                sub_fallback = torch.as_tensor(sub_fallback_np, dtype=torch.float, device=item_seq.device)
+            elif self.adaptive_position_selection_impl == 'legacy':
+                _, sub_fallback, sub_selected_mask = select_adaptive_positions(
+                    sub_scores, seq_mask, self.substitute_ratio, mode=self.position_select_mode,
+                    temperature=self.position_temperature, fallback=self.adaptive_position_fallback, return_mask=True
+                )
+                sub_fallback = torch.tensor(sub_fallback, dtype=torch.float, device=item_seq.device)
+            else:
+                sub_selected_mask, sub_fallback = select_adaptive_position_mask(
+                    sub_scores, seq_mask, self.substitute_ratio, mode=self.position_select_mode,
+                    temperature=self.position_temperature, fallback=self.adaptive_position_fallback
+                )
             self._profile_stop('sub_position_selection')
             self._profile_start('ins_position_selection')
-            ins_positions, ins_fallback, ins_selected_mask = select_adaptive_positions(
-                ins_scores, seq_mask, self.insert_ratio, mode=self.position_select_mode,
-                temperature=self.position_temperature, fallback=self.adaptive_position_fallback, return_mask=True
-            )
+            if self.adaptive_position_selection_impl == 'cpu':
+                ins_mask_np, ins_fallback_np = self._select_adaptive_position_mask_cpu(
+                    ins_scores, seq_mask_np, self.insert_ratio
+                )
+                ins_selected_mask = torch.as_tensor(ins_mask_np, dtype=torch.bool, device=item_seq.device)
+                ins_fallback = torch.as_tensor(ins_fallback_np, dtype=torch.float, device=item_seq.device)
+            elif self.adaptive_position_selection_impl == 'legacy':
+                _, ins_fallback, ins_selected_mask = select_adaptive_positions(
+                    ins_scores, seq_mask, self.insert_ratio, mode=self.position_select_mode,
+                    temperature=self.position_temperature, fallback=self.adaptive_position_fallback, return_mask=True
+                )
+                ins_fallback = torch.tensor(ins_fallback, dtype=torch.float, device=item_seq.device)
+            else:
+                ins_selected_mask, ins_fallback = select_adaptive_position_mask(
+                    ins_scores, seq_mask, self.insert_ratio, mode=self.position_select_mode,
+                    temperature=self.position_temperature, fallback=self.adaptive_position_fallback
+                )
             self._profile_stop('ins_position_selection')
 
             self._profile_start('adaptive_sequence_construction')
-            view_1, len_1, types_1 = self._build_one_adaptive_view(item_seq, sub_positions, ins_positions)
-            view_2, len_2, types_2 = self._build_one_adaptive_view(item_seq, sub_positions, ins_positions)
+            item_np = item_seq.detach().cpu().numpy()
+            seq_len_np = seq_len.detach().cpu().numpy()
+            if sub_mask_np is None:
+                sub_mask_np = sub_selected_mask.detach().cpu().numpy().astype(bool)
+            if ins_mask_np is None:
+                ins_mask_np = ins_selected_mask.detach().cpu().numpy().astype(bool)
+            view_1, len_1, types_1 = self._build_one_adaptive_view(
+                item_np, seq_len_np, sub_mask_np, ins_mask_np, item_seq.device
+            )
+            view_2, len_2, types_2 = self._build_one_adaptive_view(
+                item_np, seq_len_np, sub_mask_np, ins_mask_np, item_seq.device
+            )
             self._profile_stop('adaptive_sequence_construction')
             stats = self._summarize_position_stats(
                 importance, sub_reliability, ins_reliability, sub_scores, ins_scores,
@@ -307,36 +360,160 @@ class KGSCL(AbstractRecommender):
 
         return view_1, len_1, view_2, len_2, stats
 
-    def _build_one_adaptive_view(self, item_seq, sub_positions, ins_positions):
-        seq_list = item_seq.detach().cpu().tolist()
-        augmented_seq = []
-        augmented_len = []
-        aug_types = []
-        for batch_idx, row in enumerate(seq_list):
-            valid_positions = [idx for idx, item in enumerate(row) if int(item) != 0]
-            valid_items = [int(row[idx]) for idx in valid_positions]
-            compact_pos = {origin_pos: compact_idx for compact_idx, origin_pos in enumerate(valid_positions)}
-            if random.random() < 0.5:
-                positions = self._compact_selected_positions(
-                    sub_positions[batch_idx], compact_pos
-                ) if self.adaptive_substitute_position else None
-                aug_seq = self.KG_substitute(valid_items, positions)
-                aug_types.append('sub')
+    def _select_adaptive_position_mask_cpu(self, position_scores, seq_mask_np, ratio):
+        """Select adaptive positions on CPU from a small [B, L] score matrix."""
+        scores_np = position_scores.detach().cpu().numpy()
+        selected_mask = np.zeros(seq_mask_np.shape, dtype=bool)
+        fallback_flags = np.zeros(seq_mask_np.shape[0], dtype=np.float32)
+        temperature = max(float(self.position_temperature), 1e-8)
+
+        for batch_idx in range(scores_np.shape[0]):
+            valid_positions = np.flatnonzero(seq_mask_np[batch_idx])
+            valid_len = int(valid_positions.size)
+            if valid_len == 0 or ratio <= 0:
+                continue
+
+            select_num = int(np.ceil(float(ratio) * valid_len))
+            select_num = max(1, min(select_num, valid_len))
+            valid_scores = np.nan_to_num(scores_np[batch_idx, valid_positions], nan=0.0, posinf=0.0, neginf=0.0)
+            positive_mask = valid_scores > 0
+            use_fallback = (not np.isfinite(valid_scores).all()) or valid_scores.max() <= 0
+
+            if use_fallback:
+                chosen = np.random.choice(valid_positions, size=select_num, replace=False)
+                fallback_flags[batch_idx] = 1.0
             else:
-                positions = self._compact_selected_positions(
-                    ins_positions[batch_idx], compact_pos
-                ) if self.adaptive_insert_position else None
-                aug_seq = self.KG_insert(valid_items, positions)
+                positive_num = int(positive_mask.sum())
+                if positive_num < select_num:
+                    positive_positions = valid_positions[positive_mask]
+                    zero_positions = valid_positions[~positive_mask]
+                    fill_num = select_num - int(positive_positions.size)
+                    if fill_num > 0 and zero_positions.size > 0:
+                        fill = np.random.choice(zero_positions, size=min(fill_num, zero_positions.size),
+                                                replace=False)
+                        chosen = np.concatenate([positive_positions, fill])
+                    else:
+                        chosen = positive_positions
+                elif self.position_select_mode == 'topk':
+                    top_indices = np.argpartition(-valid_scores, select_num - 1)[:select_num]
+                    chosen = valid_positions[top_indices]
+                elif self.position_select_mode == 'sample':
+                    scaled = valid_scores / temperature
+                    scaled = scaled - scaled.max()
+                    prob = np.exp(scaled)
+                    prob = prob / prob.sum()
+                    chosen = np.random.choice(valid_positions, size=select_num, replace=False, p=prob)
+                else:
+                    raise ValueError("position_select_mode should be sample or topk")
+
+            selected_mask[batch_idx, chosen] = True
+
+        return selected_mask, fallback_flags
+
+    def _build_one_adaptive_view(self, item_np, seq_len_np, sub_mask_np, ins_mask_np, device):
+        """Build one adaptive KG view from cached numpy arrays; item_np is [B, L]."""
+        use_sub = np.random.random(item_np.shape[0]) < 0.5
+
+        if not self.adaptive_substitute_position:
+            sub_mask_np = self._random_position_mask(seq_len_np, self.max_len, self.substitute_ratio)
+        if not self.adaptive_insert_position:
+            ins_mask_np = self._random_position_mask(seq_len_np, self.max_len, self.insert_ratio)
+
+        sub_neighbors = self._sample_neighbor_matrix(item_np, sub_mask_np & use_sub[:, None], 's')
+        ins_neighbors = self._sample_neighbor_matrix(item_np, ins_mask_np & (~use_sub)[:, None], 'c')
+
+        augmented_seq = np.zeros_like(item_np)
+        augmented_len = np.zeros(item_np.shape[0], dtype=np.int64)
+        aug_types = []
+
+        for batch_idx in range(item_np.shape[0]):
+            valid_len = int(seq_len_np[batch_idx])
+            valid_len = max(0, min(valid_len, self.max_len))
+            valid_items = item_np[batch_idx, :valid_len]
+            if use_sub[batch_idx]:
+                aug_types.append('sub')
+                aug_seq = self._construct_substitute_row(
+                    valid_items, sub_mask_np[batch_idx, :valid_len], sub_neighbors[batch_idx, :valid_len]
+                )
+            else:
                 aug_types.append('ins')
-            cur_len = len(aug_seq) if len(aug_seq) < self.max_len else self.max_len
-            aug_seq = aug_seq[-self.max_len:]
-            aug_seq = aug_seq + [0] * (self.max_len - len(aug_seq))
-            augmented_seq.append(aug_seq)
-            augmented_len.append(cur_len)
-        device = item_seq.device
-        return (torch.tensor(augmented_seq, dtype=torch.long, device=device),
-                torch.tensor(augmented_len, dtype=torch.long, device=device),
+                aug_seq = self._construct_insert_row(
+                    valid_items, ins_mask_np[batch_idx, :valid_len], ins_neighbors[batch_idx, :valid_len]
+                )
+
+            cur_len = min(len(aug_seq), self.max_len)
+            if len(aug_seq) > self.max_len:
+                aug_seq = aug_seq[-self.max_len:]
+            augmented_seq[batch_idx, :len(aug_seq)] = aug_seq
+            augmented_len[batch_idx] = cur_len
+
+        return (torch.as_tensor(augmented_seq, dtype=torch.long, device=device),
+                torch.as_tensor(augmented_len, dtype=torch.long, device=device),
                 aug_types)
+
+    @staticmethod
+    def _construct_insert_row(items, selected_mask, sampled_neighbors):
+        new_items = []
+        for item, selected, neighbor in zip(items, selected_mask, sampled_neighbors):
+            item = int(item)
+            new_items.append(item)
+            if selected:
+                new_items.append(int(neighbor) if int(neighbor) > 0 else item)
+        return new_items
+
+    @staticmethod
+    def _construct_substitute_row(items, selected_mask, sampled_neighbors):
+        new_items = []
+        for item, selected, neighbor in zip(items, selected_mask, sampled_neighbors):
+            item = int(item)
+            if selected:
+                if int(neighbor) > 0:
+                    new_items.append(int(neighbor))
+                else:
+                    new_items.append(item)
+                    new_items.append(item)
+            else:
+                new_items.append(item)
+        return new_items
+
+    @staticmethod
+    def _random_position_mask(seq_len_np, max_len, ratio):
+        random_mask = np.zeros((seq_len_np.shape[0], max_len), dtype=bool)
+        for batch_idx, valid_len in enumerate(seq_len_np):
+            valid_len = int(valid_len)
+            select_num = int(float(ratio) * valid_len)
+            if valid_len <= 0 or select_num <= 0:
+                continue
+            chosen = np.random.choice(valid_len, size=min(select_num, valid_len), replace=False)
+            random_mask[batch_idx, chosen] = True
+        return random_mask
+
+    def _sample_neighbor_matrix(self, item_np, selected_mask_np, relation_type):
+        """Sample KG neighbors by grouping identical item ids, returning a [B, L] int matrix."""
+        sampled = np.full(item_np.shape, -1, dtype=np.int64)
+        valid_mask = selected_mask_np & (item_np > 0)
+        if not valid_mask.any():
+            return sampled
+
+        flat_items = item_np[valid_mask].astype(np.int64)
+        flat_sampled = np.full(flat_items.shape, -1, dtype=np.int64)
+        unique_items = np.unique(flat_items)
+        for item in unique_items:
+            item = int(item)
+            if relation_type == 's':
+                candidates = self._sub_candidate_cache[item]
+                probs = self._sub_prob_cache[item]
+            else:
+                candidates = self._ins_candidate_cache[item]
+                probs = self._ins_prob_cache[item]
+            if len(candidates) == 0:
+                continue
+            item_mask = flat_items == item
+            sample_size = int(item_mask.sum())
+            flat_sampled[item_mask] = np.random.choice(candidates, size=sample_size, p=probs)
+
+        sampled[valid_mask] = flat_sampled
+        return sampled
 
     @staticmethod
     def _compact_selected_positions(selected_positions, compact_pos):
@@ -344,7 +521,7 @@ class KGSCL(AbstractRecommender):
         return [compact_pos[pos] for pos in selected_positions if pos in compact_pos]
 
     def KG_insert(self, item_seq, selected_positions=None):
-        copied_item_seq = copy.deepcopy(item_seq)
+        copied_item_seq = list(item_seq)
         insert_num = int(self.insert_ratio * len(copied_item_seq))
         if selected_positions is None:
             insert_index = set(random.sample([i for i in range(len(copied_item_seq))], k=insert_num))
@@ -362,7 +539,7 @@ class KGSCL(AbstractRecommender):
         return new_item_seq
 
     def KG_substitute(self, item_seq, selected_positions=None):
-        copied_item_seq = copy.deepcopy(item_seq)
+        copied_item_seq = list(item_seq)
         substitute_num = int(self.substitute_ratio * len(copied_item_seq))
         if selected_positions is None:
             substitute_index = set(random.sample([i for i in range(len(copied_item_seq))], k=substitute_num))
@@ -396,8 +573,8 @@ class KGSCL(AbstractRecommender):
             count = selected_mask.float().sum().clamp_min(1.0)
             return float((distance * selected_mask.float()).sum().detach().cpu() / count.detach().cpu())
 
-        sub_fallback_tensor = torch.tensor(sub_fallback, dtype=torch.float, device=importance.device)
-        ins_fallback_tensor = torch.tensor(ins_fallback, dtype=torch.float, device=importance.device)
+        sub_fallback_tensor = sub_fallback.to(importance.device).float()
+        ins_fallback_tensor = ins_fallback.to(importance.device).float()
         return {
             'sub_importance': avg_selected(importance, sub_selected_mask),
             'sub_reliability': avg_selected(sub_reliability, sub_selected_mask),
@@ -510,6 +687,7 @@ def KGSCL_config():
     parser.add_argument('--adaptive_insert_position', default=True, action='store_false')
     parser.add_argument('--use_adaptive_profile', default=False, action='store_true')
     parser.add_argument('--adaptive_profile_batches', default=20, type=int)
+    parser.add_argument('--adaptive_position_selection_impl', default='cpu', type=str, choices=['cpu', 'mask', 'legacy'])
     parser.add_argument('--kg_data_type', default='other', type=str, choices=['pretrain', 'jointly_train', 'other'])
     parser.add_argument('--loss_type', default='CUSTOM', type=str, choices=['CE', 'BPR', 'BCE', 'CUSTOM'])
 
